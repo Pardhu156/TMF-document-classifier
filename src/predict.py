@@ -13,6 +13,17 @@ from src.exception import CustomException
 from src.logger import logger
 
 
+def _validate_model_encoder_compatibility(model: object, label_encoder: object) -> None:
+    """Fail fast when a model and label encoder do not describe the same labels."""
+    model_config = model.config
+    classes = [str(label) for label in label_encoder.classes_]
+    if model_config.num_labels != len(classes):
+        raise ValueError("Model output count does not match the saved label encoder.")
+    configured_labels = [str(model_config.id2label.get(index, model_config.id2label.get(str(index), ""))) for index in range(model_config.num_labels)]
+    if configured_labels and configured_labels != classes:
+        raise ValueError("Model label order does not match the saved label encoder.")
+
+
 @lru_cache(maxsize=1)
 def _load_inference_artifacts(model_dir: str, label_encoder_path: str):
     from transformers import AutoModelForSequenceClassification, AutoTokenizer
@@ -24,7 +35,9 @@ def _load_inference_artifacts(model_dir: str, label_encoder_path: str):
     tokenizer = AutoTokenizer.from_pretrained(model_path)
     model = AutoModelForSequenceClassification.from_pretrained(model_path)
     model.eval()
-    return tokenizer, model, joblib.load(encoder_path)
+    label_encoder = joblib.load(encoder_path)
+    _validate_model_encoder_compatibility(model, label_encoder)
+    return tokenizer, model, label_encoder
 
 
 def predict_text(text: str, config: PredictionConfig | None = None) -> dict[str, float | str]:

@@ -1,0 +1,38 @@
+{
+  "balance_classes": false,
+  "chunk_overlap": 50,
+  "chunk_size": 512,
+  "chunking_strategy": "overlapping_word_chunks",
+  "chunks_per_class": {
+    "protocol": 1046,
+    "safety_report": 456,
+    "statistical_analysis_plan": 649
+  },
+  "class_names": [
+    "protocol",
+    "safety_report",
+    "statistical_analysis_plan"
+  ],
+  "created_at": "2026-06-24T14:35:35.774828+00:00",
+  "dataset_version": "v1.0.0",
+  "docs_per_class": {
+    "protocol": 15,
+    "safety_report": 15,
+    "statistical_analysis_plan": 14
+  },
+  "num_classes": 3,
+  "preprocessed_data_path": "/Users/pardhu/Developer/TMF Classfier/artifacts/preprocessed_dataset.csv",
+  "raw_data_path": "/Users/pardhu/Developer/TMF Classfier/data",
+  "split_strategy": "document_level_split_by_file_name",
+  "test_chunks": 374,
+  "test_data_path": "/Users/pardhu/Developer/TMF Classfier/artifacts/test.csv",
+  "test_documents": 9,
+  "total_chunks": 2151,
+  "total_documents": 44,
+  "train_chunks": 1418,
+  "train_data_path": "/Users/pardhu/Developer/TMF Classfier/artifacts/train.csv",
+  "train_documents": 26,
+  "validation_chunks": 359,
+  "validation_data_path": "/Users/pardhu/Developer/TMF Classfier/artifacts/validation.csv",
+  "validation_documents": 9
+}

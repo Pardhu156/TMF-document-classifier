@@ -1,0 +1,15 @@
+{
+  "completed_at": null,
+  "dataset_version": "v1.0.0",
+  "device": null,
+  "epochs": 3,
+  "eval_batch_size": 8,
+  "learning_rate": 2e-05,
+  "max_length": 512,
+  "mlflow_run_id": null,
+  "model_version": "v1.0.0",
+  "run_id": "legacy-v1-checkpoint",
+  "started_at": null,
+  "train_batch_size": 8,
+  "training_status": "legacy_checkpoint_imported"
+}

@@ -1,0 +1,6 @@
+outs:
+- md5: 826e9b2eaedf8ee6b1fde9074a177f3e.dir
+  size: 433949146
+  nfiles: 5
+  hash: md5
+  path: saved_bioclinicalbert_tmf_3class

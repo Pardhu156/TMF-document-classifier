@@ -1,0 +1,24 @@
+[
+  {
+    "change_summary": "Stage 2 MLOps metadata and MLflow tracking added",
+    "created_at": null,
+    "dataset_version": "v1.0.0",
+    "metrics": {
+      "chunk_macro_f1": null,
+      "document_macro_f1": null
+    },
+    "model_version": "v1.0.0",
+    "version": "v1.0.0"
+  },
+  {
+    "change_summary": "Imported existing Stage 1 artifacts into Stage 2 metadata.",
+    "created_at": "2026-06-24T14:35:35.816724+00:00",
+    "dataset_version": "v1.0.0",
+    "metrics": {
+      "chunk_macro_f1": 0.680343170916467,
+      "document_macro_f1": 0.75
+    },
+    "model_version": "v1.0.0",
+    "version": "v1.0.0"
+  }
+]

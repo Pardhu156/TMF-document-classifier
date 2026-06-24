@@ -15,7 +15,8 @@ if __name__ == "__main__":
     try:
         train_df, test_df = run_data_preprocessing()
     except CustomException as error:
-        logger.warning("Preprocessing skipped: %s", error)
+        logger.exception("Preprocessing failed: %s", error)
+        raise
 
     # Uncomment this line only when training on Colab/GPU:
     # trainer, test_dataset, test_df, label_encoder = run_training()
@@ -25,11 +26,19 @@ if __name__ == "__main__":
         evaluation = run_evaluation()
         logger.info("Saved evaluation metrics: %s", evaluation["metrics"])
     except CustomException as error:
-        logger.warning("Saved model evaluation skipped: %s", error)
+        if isinstance(error.original_exception, FileNotFoundError):
+            logger.warning("Saved model evaluation skipped: %s", error)
+        else:
+            logger.exception("Saved model evaluation failed: %s", error)
+            raise
 
     sample_text = "This document describes study objectives, inclusion criteria, and treatment procedures."
     try:
         prediction = predict_text(sample_text)
         print(prediction)
     except CustomException as error:
-        logger.warning("Prediction skipped: %s", error)
+        if isinstance(error.original_exception, FileNotFoundError):
+            logger.warning("Prediction skipped: %s", error)
+        else:
+            logger.exception("Prediction failed: %s", error)
+            raise

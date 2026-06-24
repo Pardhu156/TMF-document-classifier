@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import sys
-from collections import Counter
 from datetime import datetime, timezone
 
 import joblib
@@ -13,10 +12,13 @@ import pandas as pd
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, f1_score
 from tqdm.auto import tqdm
 
-from src.config import DataIngestionConfig, EvaluationConfig, ModelTrainingConfig
+from src.config import DataIngestionConfig, EvaluationConfig, MLOpsConfig, MetadataConfig, ModelTrainingConfig
 from src.exception import CustomException
 from src.logger import logger
+from src.metadata_manager import create_evaluation_metadata, update_version_history
+from src.mlflow_tracking import end_mlflow_run, log_artifacts, log_metrics, start_mlflow_run
 from src.predict import _load_inference_artifacts
+from src.utils import file_sha256, majority_vote, package_versions
 
 
 def _metric_summary(y_true: list[str], y_pred: list[str], classes: list[str]) -> tuple[dict, np.ndarray]:
@@ -70,6 +72,9 @@ def run_evaluation(
     data_config = data_config or DataIngestionConfig()
     training_config = training_config or ModelTrainingConfig()
     evaluation_config = evaluation_config or EvaluationConfig()
+    mlops_config = MLOpsConfig()
+    metadata_config = MetadataConfig()
+    mlflow_run = start_mlflow_run(run_name=f"evaluate_{mlops_config.model_version}")
     try:
         if test_df is None:
             if not data_config.test_data_path.exists():
@@ -105,8 +110,8 @@ def run_evaluation(
         document_df = (
             test_df.groupby("file_name", as_index=False)
             .agg(
-                actual_class=("class", lambda labels: Counter(labels).most_common(1)[0][0]),
-                predicted_class=("predicted_class", lambda labels: Counter(labels).most_common(1)[0][0]),
+                actual_class=("class", lambda labels: majority_vote(labels, classes)),
+                predicted_class=("predicted_class", lambda labels: majority_vote(labels, classes)),
             )
         )
         document_metrics, document_matrix = _metric_summary(
@@ -115,13 +120,29 @@ def run_evaluation(
 
         metrics = {"chunk_level": chunk_metrics, "document_level": document_metrics}
         train_df = pd.read_csv(data_config.train_data_path) if data_config.train_data_path.exists() else pd.DataFrame()
+        validation_df = pd.read_csv(data_config.validation_data_path) if data_config.validation_data_path.exists() else pd.DataFrame()
         metadata = {
             "train_docs": int(train_df["file_name"].nunique()) if "file_name" in train_df else None,
+            "validation_docs": int(validation_df["file_name"].nunique()) if "file_name" in validation_df else None,
             "test_docs": int(document_df["file_name"].nunique()),
             "train_chunks": int(len(train_df)) if not train_df.empty else None,
+            "validation_chunks": int(len(validation_df)) if not validation_df.empty else None,
             "test_chunks": int(len(test_df)),
             "classes": classes,
             "model_name": training_config.model_name,
+            "model_dir": str(training_config.save_model_dir),
+            "data_sha256": {
+                "train": file_sha256(data_config.train_data_path) if data_config.train_data_path.exists() else None,
+                "validation": file_sha256(data_config.validation_data_path) if data_config.validation_data_path.exists() else None,
+                "test": file_sha256(data_config.test_data_path) if data_config.test_data_path.exists() else None,
+            },
+            "preprocessing": {
+                "chunk_size": data_config.chunk_size,
+                "chunk_overlap": data_config.chunk_overlap,
+                "balance_classes": data_config.balance_classes,
+                "random_state": data_config.random_state,
+            },
+            "package_versions": package_versions(("torch", "transformers", "datasets", "scikit-learn", "pandas", "numpy")),
             "created_at": datetime.now(timezone.utc).isoformat(),
             "chunk_level_metrics": chunk_metrics,
             "document_level_metrics": document_metrics,
@@ -134,8 +155,33 @@ def run_evaluation(
         evaluation_config.metrics_path.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
         pd.DataFrame(matrix_rows).to_csv(evaluation_config.confusion_matrix_path, index=False)
         evaluation_config.run_metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+        create_evaluation_metadata(metadata_config, mlops_config, evaluation_config, metrics)
+        update_version_history(
+            metadata_config,
+            mlops_config,
+            "Evaluation completed with structured metadata and optional MLflow tracking.",
+            metrics,
+        )
+        log_metrics(metrics)
+        log_artifacts(
+            [
+                str(path)
+                for path in (
+                    evaluation_config.metrics_path,
+                    evaluation_config.confusion_matrix_path,
+                    evaluation_config.run_metadata_path,
+                    metadata_config.dataset_metadata_path,
+                    metadata_config.model_metadata_path,
+                    metadata_config.training_run_metadata_path,
+                    metadata_config.evaluation_metadata_path,
+                    metadata_config.version_history_path,
+                )
+            ]
+        )
         logger.info("Evaluation complete: chunk macro-F1 %.4f; document macro-F1 %.4f.", chunk_metrics["macro_f1"], document_metrics["macro_f1"])
         return {"metrics": metrics, "metadata": metadata, "document_predictions": document_df}
     except Exception as error:
         logger.exception("Evaluation failed")
         raise CustomException(error, sys.exc_info()) from error
+    finally:
+        end_mlflow_run()

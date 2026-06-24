@@ -14,7 +14,7 @@ class CustomException(Exception):
         error_message: object,
         error_detail: tuple[object, object, TracebackType | None] | None = None,
     ) -> None:
-        exception_type, exception_value, traceback = error_detail or sys.exc_info()
+        _, exception_value, traceback = error_detail or sys.exc_info()
 
         if traceback is not None:
             filename = traceback.tb_frame.f_code.co_filename
@@ -24,6 +24,7 @@ class CustomException(Exception):
             line_no = "<unknown>"
 
         original_message = exception_value if exception_value is not None else error_message
+        self.original_exception = exception_value
         self.error_message = (
             f"Error occurred in Python script [{filename}]\n"
             f"line number [{line_no}]\n"

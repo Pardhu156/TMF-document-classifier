@@ -1,0 +1,12 @@
+{
+  "chunk_level_accuracy": 0.6149732620320856,
+  "chunk_level_macro_f1": 0.680343170916467,
+  "classification_report_available": true,
+  "confusion_matrix_path": "/Users/pardhu/Developer/TMF Classfier/artifacts/confusion_matrix.csv",
+  "dataset_version": "v1.0.0",
+  "document_level_accuracy": 0.7777777777777778,
+  "document_level_macro_f1": 0.75,
+  "evaluated_at": "2026-06-24T14:35:35.816186+00:00",
+  "metrics_path": "/Users/pardhu/Developer/TMF Classfier/artifacts/metrics.json",
+  "model_version": "v1.0.0"
+}

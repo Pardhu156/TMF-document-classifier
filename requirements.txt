@@ -1,18 +1,15 @@
-# Intel macOS wheels in this environment are available through the 2.2 series.
-# Colab/Linux uses the requested 2.6 series.
-torch==2.2.2; platform_system == "Darwin" and platform_machine == "x86_64"
-torchvision==0.17.2; platform_system == "Darwin" and platform_machine == "x86_64"
-torchaudio==2.2.2; platform_system == "Darwin" and platform_machine == "x86_64"
-torch==2.6.0; platform_system != "Darwin" or platform_machine != "x86_64"
-torchvision==0.21.0; platform_system != "Darwin" or platform_machine != "x86_64"
-torchaudio==2.6.0; platform_system != "Darwin" or platform_machine != "x86_64"
-transformers
-datasets
-accelerate
-scikit-learn
-pandas
-numpy
-joblib
-tqdm
-PyMuPDF
-python-docx
+torch>=2.2
+transformers==4.38.2
+datasets==5.0.0
+accelerate==0.27.2
+scikit-learn==1.6.1
+pandas==2.3.3
+numpy==1.26.4
+joblib==1.5.3
+tqdm==4.68.3
+PyMuPDF==1.27.2.3
+python-docx==1.2.0
+mlflow
+dvc
+python-dotenv
+pytest

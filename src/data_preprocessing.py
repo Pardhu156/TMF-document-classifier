@@ -10,13 +10,14 @@ import pandas as pd
 from sklearn.model_selection import train_test_split
 from tqdm.auto import tqdm
 
-from src.config import DataIngestionConfig
+from src.config import DataIngestionConfig, MLOpsConfig, MetadataConfig
 from src.exception import CustomException
 from src.logger import logger
+from src.metadata_manager import create_dataset_metadata
 
 
 SUPPORTED_CLASSES = ("protocol", "safety_report", "statistical_analysis_plan")
-SUPPORTED_EXTENSIONS = {".pdf", ".doc", ".docx", ".txt"}
+SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".txt"}
 MINIMUM_TEXT_LENGTH = 100
 
 
@@ -77,10 +78,11 @@ def _read_raw_documents(raw_data_dir: Path) -> pd.DataFrame:
             logger.warning("Class folder is missing and will be skipped: %s", class_directory)
             continue
 
-        files = sorted(
-            path for path in class_directory.iterdir()
-            if path.is_file() and not path.name.startswith(".") and path.suffix.lower() in SUPPORTED_EXTENSIONS
-        )
+        candidate_files = sorted(path for path in class_directory.iterdir() if path.is_file() and not path.name.startswith("."))
+        legacy_doc_files = [path for path in candidate_files if path.suffix.lower() == ".doc"]
+        for file_path in legacy_doc_files:
+            logger.warning("Skipping legacy .doc file %s; convert it to .docx before preprocessing.", file_path.name)
+        files = [path for path in candidate_files if path.suffix.lower() in SUPPORTED_EXTENSIONS]
         logger.info("Found %d raw files for class '%s'.", len(files), class_name)
         for file_path in tqdm(files, desc=f"Extracting {class_name}", unit="file"):
             try:
@@ -91,10 +93,20 @@ def _read_raw_documents(raw_data_dir: Path) -> pd.DataFrame:
             if len(full_text) < MINIMUM_TEXT_LENGTH:
                 logger.warning("Skipping %s because extraction produced insufficient text.", file_path.name)
                 continue
-            documents.append({"file_name": file_path.name, "class": class_name, "full_text": full_text})
+            documents.append(
+                {
+                    "file_name": file_path.relative_to(raw_data_dir).as_posix(),
+                    "class": class_name,
+                    "full_text": full_text,
+                }
+            )
 
     if not documents:
         raise ValueError(f"No readable documents found under {raw_data_dir}")
+    found_classes = {document["class"] for document in documents}
+    missing_classes = set(SUPPORTED_CLASSES).difference(found_classes)
+    if missing_classes:
+        raise ValueError(f"No readable documents found for required classes: {sorted(missing_classes)}")
     return pd.DataFrame(documents)
 
 
@@ -129,26 +141,45 @@ def _balance_chunks(dataframe: pd.DataFrame, random_state: int) -> pd.DataFrame:
     return pd.concat(balanced, ignore_index=True).sample(frac=1, random_state=random_state).reset_index(drop=True)
 
 
-def _split_by_document(dataframe: pd.DataFrame, config: DataIngestionConfig) -> tuple[pd.DataFrame, pd.DataFrame]:
+def _split_by_document(
+    dataframe: pd.DataFrame,
+    config: DataIngestionConfig,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     document_labels = dataframe.groupby("file_name", as_index=False)["class"].agg(
         lambda labels: labels.mode().iat[0]
     )
     class_counts = document_labels["class"].value_counts()
-    if len(document_labels) < 2 or class_counts.min() < 2:
-        raise ValueError("At least two documents per class are required for a stratified document split.")
+    if len(document_labels) < 2 or class_counts.min() < 3:
+        raise ValueError("At least three documents per class are required for train/validation/test splitting.")
+    held_out_size = config.validation_size + config.test_size
+    if not 0 < held_out_size < 1:
+        raise ValueError("validation_size + test_size must be greater than zero and less than one.")
 
-    train_documents, test_documents = train_test_split(
+    train_documents, held_out_documents, _, held_out_labels = train_test_split(
         document_labels["file_name"],
-        test_size=config.test_size,
+        document_labels["class"],
+        test_size=held_out_size,
         random_state=config.random_state,
         stratify=document_labels["class"],
     )
+    test_fraction_of_held_out = config.test_size / held_out_size
+    validation_documents, test_documents = train_test_split(
+        held_out_documents,
+        test_size=test_fraction_of_held_out,
+        random_state=config.random_state,
+        stratify=held_out_labels,
+    )
     train_df = dataframe[dataframe["file_name"].isin(train_documents)].reset_index(drop=True)
+    validation_df = dataframe[dataframe["file_name"].isin(validation_documents)].reset_index(drop=True)
     test_df = dataframe[dataframe["file_name"].isin(test_documents)].reset_index(drop=True)
-    overlap = set(train_df["file_name"]).intersection(test_df["file_name"])
+    overlap = (
+        set(train_df["file_name"]).intersection(validation_df["file_name"])
+        | set(train_df["file_name"]).intersection(test_df["file_name"])
+        | set(validation_df["file_name"]).intersection(test_df["file_name"])
+    )
     if overlap:
         raise RuntimeError(f"Document leakage detected: {sorted(overlap)[:5]}")
-    return train_df, test_df
+    return train_df, validation_df, test_df
 
 
 def run_data_preprocessing(config: DataIngestionConfig | None = None) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -171,12 +202,27 @@ def run_data_preprocessing(config: DataIngestionConfig | None = None) -> tuple[p
             logger.info("Saved balanced dataset to %s", config.balanced_data_path)
         _log_chunk_counts(split_source, "Chunks per class after balancing")
 
-        train_df, test_df = _split_by_document(split_source, config)
+        train_df, validation_df, test_df = _split_by_document(split_source, config)
         train_df.to_csv(config.train_data_path, index=False)
+        validation_df.to_csv(config.validation_data_path, index=False)
         test_df.to_csv(config.test_data_path, index=False)
+        create_dataset_metadata(
+            config,
+            MetadataConfig(),
+            MLOpsConfig(),
+            chunk_df,
+            train_df,
+            test_df,
+            validation_df,
+        )
         logger.info(
-            "Saved train/test split: %d/%d documents and %d/%d chunks.",
-            train_df["file_name"].nunique(), test_df["file_name"].nunique(), len(train_df), len(test_df),
+            "Saved train/validation/test split: %d/%d/%d documents and %d/%d/%d chunks.",
+            train_df["file_name"].nunique(),
+            validation_df["file_name"].nunique(),
+            test_df["file_name"].nunique(),
+            len(train_df),
+            len(validation_df),
+            len(test_df),
         )
         return train_df, test_df
     except Exception as error:

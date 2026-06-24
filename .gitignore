@@ -11,14 +11,13 @@ __pycache__/
 # DVC cache
 .dvc/cache
 
-# Temporary artifacts; DVC tracks their corresponding .dvc files.
+# Generated artifacts are stored through DVC; Git stores only their .dvc pointers.
 artifacts/*.csv
 artifacts/*.json
-
-# Keep important model artifacts if they need to be versioned locally.
-!artifacts/saved_bioclinicalbert_tmf_3class/
-!artifacts/saved_bioclinicalbert_tmf_3class/**
-!artifacts/label_encoder.pkl
+artifacts/*.pkl
+artifacts/*.bin
+artifacts/*.safetensors
+artifacts/*/
 
 # Raw data is private; DVC stores its pointer files in Git.
 data/*
