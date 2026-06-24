@@ -2,3 +2,20 @@ venv/
 artifacts/
 data/
 logs/
+
+venv/
+logs/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# Ignore temporary artifacts
+artifacts/*.csv
+artifacts/*.json
+
+# Keep final model
+!artifacts/saved_bioclinicalbert_tmf_3class/
+!artifacts/label_encoder.pkl
+
+# Ignore data if private
+data/*

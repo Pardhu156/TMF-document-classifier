@@ -1,103 +1,37 @@
-# TMF Document Classifier
+# TMF Classifier
 
-An enterprise-style NLP system for automatically classifying clinical trial documents into their corresponding Trial Master File (TMF) sections using BioClinicalBERT.
+Stage 1 is a small, modular BioClinicalBERT pipeline for classifying Trial Master File documents. It currently supports three classes:
 
-## Overview
+- `protocol`
+- `safety_report`
+- `statistical_analysis_plan`
 
-Clinical trials generate thousands of documents throughout their lifecycle. Manual classification and filing of these documents into the Trial Master File (TMF) is time-consuming, error-prone, and resource intensive.
+Long documents are split into text chunks because BERT has a maximum token limit. The data split happens at the document (`file_name`) level, so chunks from the same document never appear in both train and test sets. This prevents leakage.
 
-This project automates TMF document classification by fine-tuning BioClinicalBERT on real-world clinical trial documents.
+## Workflow
 
-The system classifies documents into predefined TMF categories such as:
+1. Place raw PDF, DOCX, or TXT files in the three class folders under `data/`.
+2. Run preprocessing to extract and clean text, create overlapping chunks, and save `artifacts/preprocessed_dataset.csv`, `artifacts/train.csv`, and `artifacts/test.csv`.
+3. Train on Colab/GPU when needed; the call in `main.py` is deliberately commented out.
+4. Place the saved model and `label_encoder.pkl` inside `artifacts/` for local evaluation and prediction.
 
-* Protocol
-* Statistical Analysis Plan (SAP)
-* Safety Report
+Evaluation reports chunk-level accuracy and macro F1, then groups chunk predictions by `file_name` and applies majority voting for document-level accuracy and macro F1. Metrics, run metadata, and both confusion matrices are stored in `artifacts/`.
 
-## Features
+## Local use
 
-* Fine-tuned BioClinicalBERT for TMF document classification.
-* Automated PDF/DOCX text extraction.
-* Document chunking for long clinical documents.
-* Multi-class clinical document classification.
-* Enterprise-ready modular architecture.
-* Model evaluation using Accuracy, Macro F1-score, and Confusion Matrix.
-* Extensible architecture for future TMF classes.
+Install dependencies with `pip install -r requirements.txt`, then run:
 
-## Project Architecture
-
-```text
-Clinical Documents
-        ↓
-Text Extraction
-        ↓
-Preprocessing
-        ↓
-Chunking
-        ↓
-BioClinicalBERT
-        ↓
-TMF Section Prediction
+```bash
+python main.py
 ```
 
-## Dataset
+The local workflow is designed to use an already trained model in `artifacts/saved_bioclinicalbert_tmf_3class/`. Training is best run in Colab because fine-tuning BioClinicalBERT benefits from a GPU.
 
-The dataset consists of publicly available clinical trial documents collected from multiple sources, including:
-
-* Clinical study protocols
-* Statistical analysis plans
-* Safety reports
-* Public clinical research templates and regulatory documents
-
-Documents were converted into text and segmented into overlapping chunks before training.
-
-## Model
-
-* Base Model: BioClinicalBERT
-* Framework: Hugging Face Transformers
-* Task: Multi-class Document Classification
-
-## Evaluation Metrics
-
-* Accuracy
-* Macro F1 Score
-* Precision
-* Recall
-* Confusion Matrix
-
-## Tech Stack
-
-* Python
-* PyTorch
-* Hugging Face Transformers
-* BioClinicalBERT
-* Scikit-learn
-* Pandas
-* FastAPI
-* Docker
-* MLflow
-
-## Repository Structure
+## Layout
 
 ```text
-TMF-Document-Classifier/
-│
-├── notebooks/
-├── src/
-├── app/
-├── data/
-├── models/
-├── experiments/
-├── requirements.txt
-├── README.md
-└── LICENSE
+src/                 Modular preprocessing, training, evaluation, and prediction code
+artifacts/           Preprocessed data, train/test splits, model, and evaluation outputs
+data/<class>/         Raw files in protocol, safety_report, and statistical_analysis_plan folders
+logs/                Application logs
 ```
-
-## Future Enhancements
-
-* Add additional TMF classes (e.g., Informed Consent Forms, Clinical Study Reports).
-* Agentic TMF auto-filing workflow.
-* Confidence-based manual review pipeline.
-* MLflow experiment tracking.
-* Dockerized deployment.
-* Cloud deployment support.
