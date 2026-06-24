@@ -1,21 +1,26 @@
-venv/
-artifacts/
-data/
-logs/
-
+.env
+.env.example
 venv/
 logs/
 __pycache__/
+**pycache**/
 *.pyc
 .ipynb_checkpoints/
+.DS_Store
 
-# Ignore temporary artifacts
+# DVC cache
+.dvc/cache
+
+# Temporary artifacts; DVC tracks their corresponding .dvc files.
 artifacts/*.csv
 artifacts/*.json
 
-# Keep final model
+# Keep important model artifacts if they need to be versioned locally.
 !artifacts/saved_bioclinicalbert_tmf_3class/
+!artifacts/saved_bioclinicalbert_tmf_3class/**
 !artifacts/label_encoder.pkl
 
-# Ignore data if private
+# Raw data is private; DVC stores its pointer files in Git.
 data/*
+!data/.gitignore
+/data
