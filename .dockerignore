@@ -8,8 +8,10 @@ __pycache__
 *.pyc
 .ipynb_checkpoints
 .DS_Store
-artifacts
+artifacts/*
+!artifacts/saved_bioclinicalbert_tmf_3class/
+!artifacts/saved_bioclinicalbert_tmf_3class/**
+!artifacts/label_encoder.pkl
 data
 research
-metadata
 *.dvc

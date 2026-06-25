@@ -152,13 +152,18 @@ The tests do not run training. Prediction tests are skipped automatically if sav
 
 ```bash
 docker build -t tmf-classifier .
-docker run -p 8000:8000 \
-  -v "$(pwd)/artifacts:/app/artifacts:ro" \
-  -v "$(pwd)/metadata:/app/metadata:ro" \
-  tmf-classifier
+docker run -p 8000:8000 tmf-classifier
 ```
 
-The Docker image uses `requirements-api.txt`, which contains only API/inference dependencies and CPU-only PyTorch. The full `requirements.txt` remains for local development, testing, training utilities, DVC, and MLflow. Large local folders such as `artifacts/` and `data/` are excluded from the image; mount `artifacts/` at runtime for local inference.
+The Docker image uses `requirements-api.txt`, which contains only API/inference dependencies and CPU-only PyTorch. The full `requirements.txt` remains for local development, testing, training utilities, DVC, and MLflow.
+
+For easier demos, the Docker image includes only the inference artifacts required to run predictions:
+
+- `artifacts/saved_bioclinicalbert_tmf_3class/`
+- `artifacts/label_encoder.pkl`
+- `metadata/`
+
+Raw `data/`, generated CSVs, logs, `.env`, and DVC cache files are excluded from the image.
 
 ### Docker Compose
 
