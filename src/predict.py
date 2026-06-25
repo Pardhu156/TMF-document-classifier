@@ -11,6 +11,7 @@ import joblib
 from src.config import PredictionConfig
 from src.exception import CustomException
 from src.logger import logger
+from src.utils import decision_status_from_confidence
 
 
 def _validate_model_encoder_compatibility(model: object, label_encoder: object) -> None:
@@ -59,6 +60,18 @@ def predict_text(text: str, config: PredictionConfig | None = None) -> dict[str,
             "predicted_label": str(label_encoder.inverse_transform([predicted_index])[0]),
             "confidence": float(probabilities[predicted_index].item()),
         }
+        # Single-text prediction is chunk-level inference. The extra fields keep
+        # the API response compatible with document-level outputs, but no
+        # document voting or agentic action happens here.
+        result.update(
+            {
+                "model_confidence": result["confidence"],
+                "vote_confidence": 1.0,
+                "margin_confidence": 1.0,
+                "requires_review": bool(result["confidence"] < 0.80),
+                "decision_status": decision_status_from_confidence(float(result["confidence"]), 1.0),
+            }
+        )
         logger.info("Predicted label '%s' with confidence %.4f", result["predicted_label"], result["confidence"])
         return result
     except Exception as error:

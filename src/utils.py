@@ -24,6 +24,71 @@ def majority_vote(labels: Iterable[str], class_order: Sequence[str]) -> str:
     return sorted(label for label, count in counts.items() if count == highest_count)[0]
 
 
+def decision_status_from_confidence(final_confidence: float, margin_confidence: float) -> str:
+    """Return a passive decision label for future review workflows.
+
+    This field is metadata only. It does not trigger any agentic or automated
+    action in the current application.
+    """
+    if final_confidence >= 0.80 and margin_confidence >= 0.20:
+        return "auto_classify"
+    if final_confidence >= 0.60 and margin_confidence >= 0.15:
+        return "agent_review"
+    return "human_review"
+
+
+def document_confidence_summary(
+    chunk_results: Sequence[dict[str, object]],
+    class_order: Sequence[str] | None = None,
+) -> dict[str, object]:
+    """Compute scalable document-level confidence from chunk predictions.
+
+    Expected chunk result keys are ``predicted_label`` and ``confidence``. The
+    returned ``decision_status`` is intended for future agentic workflows only;
+    no agent action is executed by this utility.
+    """
+    if not chunk_results:
+        raise ValueError("Cannot compute document confidence without chunk predictions.")
+
+    labels = [str(result["predicted_label"]) for result in chunk_results]
+    ordered_classes = list(class_order or [])
+    for label in labels:
+        if label not in ordered_classes:
+            ordered_classes.append(label)
+
+    predicted_label = majority_vote(labels, ordered_classes)
+    label_counts = Counter(labels)
+    total_chunks = len(chunk_results)
+    winning_votes = int(label_counts[predicted_label])
+    sorted_vote_counts = sorted(label_counts.values(), reverse=True)
+    second_best_votes = int(sorted_vote_counts[1]) if len(sorted_vote_counts) > 1 else 0
+
+    winning_confidences = [
+        float(result["confidence"])
+        for result in chunk_results
+        if str(result["predicted_label"]) == predicted_label
+    ]
+    model_confidence = sum(winning_confidences) / len(winning_confidences)
+    vote_confidence = winning_votes / total_chunks
+    margin_confidence = (winning_votes - second_best_votes) / total_chunks
+    final_confidence = min(model_confidence * vote_confidence * (1 + margin_confidence), 1.0)
+    decision_status = decision_status_from_confidence(final_confidence, margin_confidence)
+
+    return {
+        "predicted_label": predicted_label,
+        "confidence": float(final_confidence),
+        "model_confidence": float(model_confidence),
+        "vote_confidence": float(vote_confidence),
+        "margin_confidence": float(margin_confidence),
+        "requires_review": bool(final_confidence < 0.80),
+        "decision_status": decision_status,
+        "num_chunks": int(total_chunks),
+        "winning_votes": winning_votes,
+        "second_best_votes": second_best_votes,
+        "chunk_predictions": dict(sorted(label_counts.items())),
+    }
+
+
 def file_sha256(file_path: Path) -> str:
     """Return a SHA-256 digest for a file without loading it all into memory."""
     digest = sha256()

@@ -18,7 +18,7 @@ from src.logger import logger
 from src.metadata_manager import create_evaluation_metadata, update_version_history
 from src.mlflow_tracking import end_mlflow_run, log_artifacts, log_metrics, start_mlflow_run
 from src.predict import _load_inference_artifacts
-from src.utils import file_sha256, majority_vote, package_versions
+from src.utils import document_confidence_summary, file_sha256, majority_vote, package_versions
 
 
 def _metric_summary(y_true: list[str], y_pred: list[str], classes: list[str]) -> tuple[dict, np.ndarray]:
@@ -35,14 +35,22 @@ def _metric_summary(y_true: list[str], y_pred: list[str], classes: list[str]) ->
     )
 
 
-def _predict_saved_model(test_df: pd.DataFrame, training_config: ModelTrainingConfig) -> np.ndarray:
-    """Generate encoded chunk predictions from the model already in artifacts/."""
+def _softmax(logits: np.ndarray) -> np.ndarray:
+    """Compute softmax probabilities for a 2D numpy logits array."""
+    shifted = logits - np.max(logits, axis=-1, keepdims=True)
+    exp_values = np.exp(shifted)
+    return exp_values / np.sum(exp_values, axis=-1, keepdims=True)
+
+
+def _predict_saved_model(test_df: pd.DataFrame, training_config: ModelTrainingConfig) -> tuple[np.ndarray, np.ndarray]:
+    """Generate encoded chunk predictions and confidences from saved artifacts."""
     import torch
 
     tokenizer, model, _ = _load_inference_artifacts(
         str(training_config.save_model_dir), str(training_config.label_encoder_path)
     )
     predicted_indices: list[int] = []
+    confidences: list[float] = []
     for start in tqdm(
         range(0, len(test_df), 16),
         desc="Evaluating chunks",
@@ -51,8 +59,47 @@ def _predict_saved_model(test_df: pd.DataFrame, training_config: ModelTrainingCo
         texts = test_df["chunk_text"].iloc[start : start + 16].astype(str).tolist()
         batch = tokenizer(texts, truncation=True, max_length=training_config.max_length, padding=True, return_tensors="pt")
         with torch.no_grad():
-            predicted_indices.extend(torch.argmax(model(**batch).logits, dim=-1).tolist())
-    return np.asarray(predicted_indices)
+            probabilities = torch.softmax(model(**batch).logits, dim=-1)
+            batch_confidences, batch_predictions = torch.max(probabilities, dim=-1)
+            predicted_indices.extend(batch_predictions.tolist())
+            confidences.extend(batch_confidences.tolist())
+    return np.asarray(predicted_indices), np.asarray(confidences)
+
+
+def _document_prediction_summary(group: pd.DataFrame, classes: list[str]) -> pd.Series:
+    """Aggregate one document's chunk predictions into label and confidence fields."""
+    confidence_summary = document_confidence_summary(
+        group[["predicted_class", "prediction_confidence"]]
+        .rename(columns={"predicted_class": "predicted_label", "prediction_confidence": "confidence"})
+        .to_dict(orient="records"),
+        classes,
+    )
+    logger.info(
+        "Document evaluation aggregation for %s: total_chunks=%d, winning_votes=%d, "
+        "second_best_votes=%d, final_confidence=%.4f, decision_status=%s",
+        group.name,
+        confidence_summary["num_chunks"],
+        confidence_summary["winning_votes"],
+        confidence_summary["second_best_votes"],
+        confidence_summary["confidence"],
+        confidence_summary["decision_status"],
+    )
+    return pd.Series(
+        {
+            "actual_class": majority_vote(group["class"].astype(str).tolist(), classes),
+            "predicted_class": confidence_summary["predicted_label"],
+            "confidence": confidence_summary["confidence"],
+            "model_confidence": confidence_summary["model_confidence"],
+            "vote_confidence": confidence_summary["vote_confidence"],
+            "margin_confidence": confidence_summary["margin_confidence"],
+            "requires_review": confidence_summary["requires_review"],
+            "decision_status": confidence_summary["decision_status"],
+            "num_chunks": confidence_summary["num_chunks"],
+            "winning_votes": confidence_summary["winning_votes"],
+            "second_best_votes": confidence_summary["second_best_votes"],
+            "chunk_predictions": confidence_summary["chunk_predictions"],
+        }
+    )
 
 
 def run_evaluation(
@@ -95,25 +142,26 @@ def run_evaluation(
 
         if trainer is not None and test_dataset is not None:
             logger.info("Evaluating with the in-memory trainer.")
-            predicted_indices = np.argmax(trainer.predict(test_dataset).predictions, axis=-1)
+            prediction_output = trainer.predict(test_dataset)
+            probabilities = _softmax(prediction_output.predictions)
+            predicted_indices = np.argmax(probabilities, axis=-1)
+            prediction_confidences = np.max(probabilities, axis=-1)
         else:
             logger.info("Evaluating the saved model from %s", training_config.save_model_dir)
-            predicted_indices = _predict_saved_model(test_df, training_config)
+            predicted_indices, prediction_confidences = _predict_saved_model(test_df, training_config)
 
         if len(predicted_indices) != len(test_df):
             raise RuntimeError("Prediction count does not match the number of test chunks.")
         test_df["predicted_class"] = label_encoder.inverse_transform(predicted_indices).astype(str)
+        test_df["prediction_confidence"] = prediction_confidences.astype(float)
 
         chunk_metrics, chunk_matrix = _metric_summary(
             test_df["class"].tolist(), test_df["predicted_class"].tolist(), classes
         )
-        document_df = (
-            test_df.groupby("file_name", as_index=False)
-            .agg(
-                actual_class=("class", lambda labels: majority_vote(labels, classes)),
-                predicted_class=("predicted_class", lambda labels: majority_vote(labels, classes)),
-            )
-        )
+        document_df = test_df.groupby("file_name").apply(
+            _document_prediction_summary,
+            classes=classes,
+        ).reset_index()
         document_metrics, document_matrix = _metric_summary(
             document_df["actual_class"].tolist(), document_df["predicted_class"].tolist(), classes
         )

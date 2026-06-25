@@ -1,0 +1,15 @@
+.git
+.dvc/cache
+.env
+venv
+logs
+__pycache__
+**/__pycache__
+*.pyc
+.ipynb_checkpoints
+.DS_Store
+artifacts
+data
+research
+metadata
+*.dvc

@@ -57,6 +57,11 @@ def _clean_text(text: str) -> str:
     return "\n".join(cleaned_lines)
 
 
+def clean_document_text(text: str) -> str:
+    """Public wrapper for the shared TMF document-cleaning strategy."""
+    return _clean_text(text)
+
+
 def _chunk_text(text: str, chunk_size: int, chunk_overlap: int) -> list[str]:
     """Create overlapping word chunks without altering the document's text content."""
     if chunk_size <= 0:
@@ -67,6 +72,11 @@ def _chunk_text(text: str, chunk_size: int, chunk_overlap: int) -> list[str]:
     words = text.split()
     step = chunk_size - chunk_overlap
     return [" ".join(words[start : start + chunk_size]) for start in range(0, len(words), step) if words[start : start + chunk_size]]
+
+
+def chunk_document_text(text: str, chunk_size: int, chunk_overlap: int) -> list[str]:
+    """Public wrapper for the shared overlapping word chunking strategy."""
+    return _chunk_text(text, chunk_size, chunk_overlap)
 
 
 def _read_raw_documents(raw_data_dir: Path) -> pd.DataFrame:

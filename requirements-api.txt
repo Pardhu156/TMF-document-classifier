@@ -1,7 +1,4 @@
-torch>=2.2
 transformers==4.38.2
-datasets==5.0.0
-accelerate==0.27.2
 scikit-learn==1.6.1
 pandas==2.3.3
 numpy==1.26.4
@@ -13,8 +10,4 @@ PyPDF2
 fastapi
 uvicorn
 python-multipart
-mlflow
-dvc
 python-dotenv
-pytest
-httpx

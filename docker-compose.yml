@@ -1,0 +1,10 @@
+services:
+  tmf_classifier:
+    build: .
+    container_name: tmf_classifier_api
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./artifacts:/app/artifacts:ro
+      - ./metadata:/app/metadata:ro
+    command: uvicorn app:app --host 0.0.0.0 --port 8000

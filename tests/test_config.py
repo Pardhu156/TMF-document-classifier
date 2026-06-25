@@ -1,4 +1,11 @@
-from src.config import DataIngestionConfig, MLOpsConfig, MetadataConfig, ModelTrainingConfig
+from src.config import (
+    DataIngestionConfig,
+    EvaluationConfig,
+    MLOpsConfig,
+    MetadataConfig,
+    ModelTrainingConfig,
+    PredictionConfig,
+)
 
 
 def test_config_paths_are_initialized() -> None:
@@ -17,3 +24,11 @@ def test_mlops_config_has_safe_defaults() -> None:
     assert config.model_version
     assert config.dataset_version
     assert config.environment
+
+
+def test_api_related_configs_initialize() -> None:
+    prediction_config = PredictionConfig()
+    evaluation_config = EvaluationConfig()
+
+    assert prediction_config.model_dir.parent.exists()
+    assert evaluation_config.metrics_path.parent.exists()

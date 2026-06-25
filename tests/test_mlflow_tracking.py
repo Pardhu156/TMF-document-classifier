@@ -2,6 +2,7 @@ from src import mlflow_tracking
 
 
 def test_setup_mlflow_is_safe_without_credentials(monkeypatch) -> None:
+    monkeypatch.setattr(mlflow_tracking, "load_dotenv", lambda *args, **kwargs: False)
     for name in (
         "MLFLOW_TRACKING_URI",
         "MLFLOW_TRACKING_USERNAME",
