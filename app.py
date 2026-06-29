@@ -3,20 +3,25 @@
 from __future__ import annotations
 
 import sys
-import tempfile
 from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 
-from src.config import DataIngestionConfig, MetadataConfig, MLOpsConfig, ModelTrainingConfig
-from src.data_preprocessing import chunk_document_text, clean_document_text
+from src.config import DatabaseConfig, MetadataConfig, MLOpsConfig, ModelTrainingConfig
 from src.exception import CustomException
-from src.file_utils import extract_text_from_docx, extract_text_from_pdf, extract_text_from_txt
 from src.logger import logger
+from src.pipeline.cloud_ingestion_pipeline import CloudIngestionPipeline
+from src.pipeline.conditional_retraining_pipeline import ConditionalRetrainingPipeline
 from src.predict import predict_text
-from src.schemas import FilePredictionResponse, PredictionRequest, PredictionResponse
-from src.utils import document_confidence_summary, load_json
+from src.schemas import (
+    DocumentVerificationRequest,
+    DocumentVerificationResponse,
+    FilePredictionResponse,
+    PredictionRequest,
+    PredictionResponse,
+)
+from src.utils import load_json
 
 
 app = FastAPI(
@@ -56,66 +61,6 @@ def _get_model_info() -> dict[str, Any]:
         "model_name": model_metadata.get("model_name", training_config.model_name),
         "number_of_classes": model_metadata.get("num_labels") or dataset_metadata.get("num_classes") or len(class_names),
         "class_names": class_names,
-    }
-
-
-def _extract_uploaded_file_text(file_path: Path) -> str:
-    """Extract text from one supported uploaded document."""
-    suffix = file_path.suffix.lower()
-    if suffix == ".pdf":
-        return extract_text_from_pdf(file_path)
-    if suffix == ".docx":
-        return extract_text_from_docx(file_path)
-    if suffix == ".txt":
-        return extract_text_from_txt(file_path)
-    raise ValueError(f"Unsupported file type: {suffix}")
-
-
-def _predict_document_chunks(filename: str, text: str) -> dict[str, Any]:
-    """Chunk full document text, predict each chunk, and aggregate by majority vote."""
-    data_config = DataIngestionConfig()
-    cleaned_text = clean_document_text(text)
-    if not cleaned_text.strip():
-        raise ValueError("Uploaded file does not contain extractable text.")
-
-    chunks = chunk_document_text(
-        cleaned_text,
-        chunk_size=data_config.chunk_size,
-        chunk_overlap=data_config.chunk_overlap,
-    )
-    if not chunks:
-        raise ValueError("Uploaded file did not produce any prediction chunks.")
-
-    chunk_results = [predict_text(chunk) for chunk in chunks]
-    class_order = _get_model_info().get("class_names") or sorted(
-        {str(result["predicted_label"]) for result in chunk_results}
-    )
-    confidence_summary = document_confidence_summary(
-        chunk_results,
-        [str(label) for label in class_order],
-    )
-
-    logger.info(
-        "File prediction complete for %s: total_chunks=%d, winning_votes=%d, "
-        "second_best_votes=%d, final_confidence=%.4f, decision_status=%s",
-        filename,
-        confidence_summary["num_chunks"],
-        confidence_summary["winning_votes"],
-        confidence_summary["second_best_votes"],
-        confidence_summary["confidence"],
-        confidence_summary["decision_status"],
-    )
-    return {
-        "filename": filename,
-        "predicted_label": confidence_summary["predicted_label"],
-        "confidence": confidence_summary["confidence"],
-        "model_confidence": confidence_summary["model_confidence"],
-        "vote_confidence": confidence_summary["vote_confidence"],
-        "margin_confidence": confidence_summary["margin_confidence"],
-        "requires_review": confidence_summary["requires_review"],
-        "decision_status": confidence_summary["decision_status"],
-        "num_chunks": confidence_summary["num_chunks"],
-        "chunk_predictions": confidence_summary["chunk_predictions"],
     }
 
 
@@ -166,21 +111,7 @@ async def predict_file(file: UploadFile = File(...)) -> dict[str, Any]:
         )
 
     try:
-        contents = await file.read()
-        if not contents:
-            raise HTTPException(status_code=400, detail="Uploaded file is empty.")
-
-        with tempfile.TemporaryDirectory(prefix="tmf_upload_") as temp_dir:
-            temp_path = Path(temp_dir) / safe_filename
-            temp_path.write_bytes(contents)
-            extracted_text = _extract_uploaded_file_text(temp_path)
-
-        logger.info(
-            "Uploaded file %s produced %d extracted characters.",
-            safe_filename,
-            len(extracted_text),
-        )
-        return _predict_document_chunks(safe_filename, extracted_text)
+        return await CloudIngestionPipeline().run(file)
     except HTTPException:
         raise
     except ValueError as error:
@@ -191,4 +122,73 @@ async def predict_file(file: UploadFile = File(...)) -> dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(error)) from error
     except Exception as error:
         logger.exception("File prediction failed for %s", safe_filename)
+        raise HTTPException(status_code=500, detail=str(CustomException(error, sys.exc_info()))) from error
+
+
+@app.post("/retrain")
+def retrain() -> dict[str, Any]:
+    """Manually start the conditional retraining pipeline.
+
+    This endpoint only checks for verified new training data and prepares the
+    retraining metadata. It does not run an agentic workflow.
+    """
+    try:
+        repository = None
+        if DatabaseConfig().is_configured:
+            from src.database.repository import TMFRepository
+
+            repository = TMFRepository()
+        return ConditionalRetrainingPipeline(repository=repository).run()
+    except CustomException as error:
+        logger.exception("Retraining endpoint failed")
+        raise HTTPException(status_code=500, detail=str(error)) from error
+    except Exception as error:
+        logger.exception("Retraining endpoint failed")
+        raise HTTPException(status_code=500, detail=str(CustomException(error, sys.exc_info()))) from error
+
+
+@app.post("/documents/{doc_id}/verify", response_model=DocumentVerificationResponse)
+def verify_document(doc_id: int, request: DocumentVerificationRequest) -> dict[str, Any]:
+    """Manual admin review endpoint for verified retraining labels.
+
+    This is intentionally simple for the current admin-only workflow. In a
+    production app, replace this with RBAC/authenticated review permissions.
+    """
+    try:
+        if not request.verified_label.strip():
+            raise HTTPException(status_code=400, detail="verified_label must be a non-empty string")
+        if not DatabaseConfig().is_configured:
+            raise HTTPException(status_code=503, detail="PostgreSQL is not configured.")
+
+        from src.database.repository import TMFRepository
+
+        repository = TMFRepository()
+        document = repository.verify_document(doc_id, request.verified_label.strip())
+        if document is None:
+            raise HTTPException(status_code=404, detail=f"Document {doc_id} not found.")
+
+        repository.save_audit_log(
+            event_type="document_verified",
+            entity_type="document",
+            entity_id=str(doc_id),
+            message="Document verified by admin review.",
+            details={
+                "verified_label": request.verified_label.strip(),
+                "reviewer": request.reviewer,
+                "notes": request.notes,
+            },
+        )
+        logger.info("Document %s verified with label '%s'.", doc_id, request.verified_label.strip())
+        return {
+            "doc_id": document["doc_id"],
+            "filename": document["filename"],
+            "verified_label": document["verified_label"],
+            "document_status": document["document_status"],
+            "used_for_training": document["used_for_training"],
+            "message": "Document verified. It is now eligible for conditional retraining.",
+        }
+    except HTTPException:
+        raise
+    except Exception as error:
+        logger.exception("Document verification failed")
         raise HTTPException(status_code=500, detail=str(CustomException(error, sys.exc_info()))) from error

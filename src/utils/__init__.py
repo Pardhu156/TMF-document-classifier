@@ -41,12 +41,7 @@ def document_confidence_summary(
     chunk_results: Sequence[dict[str, object]],
     class_order: Sequence[str] | None = None,
 ) -> dict[str, object]:
-    """Compute scalable document-level confidence from chunk predictions.
-
-    Expected chunk result keys are ``predicted_label`` and ``confidence``. The
-    returned ``decision_status`` is intended for future agentic workflows only;
-    no agent action is executed by this utility.
-    """
+    """Compute scalable document-level confidence from chunk predictions."""
     if not chunk_results:
         raise ValueError("Cannot compute document confidence without chunk predictions.")
 
@@ -140,7 +135,7 @@ def get_git_commit_hash() -> str | None:
     try:
         return subprocess.check_output(
             ["git", "rev-parse", "HEAD"],
-            cwd=Path(__file__).resolve().parents[1],
+            cwd=Path(__file__).resolve().parents[2],
             text=True,
             stderr=subprocess.DEVNULL,
         ).strip()

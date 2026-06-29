@@ -4,6 +4,8 @@ from dataclasses import dataclass
 import os
 from pathlib import Path
 
+from sqlalchemy.engine import URL
+
 try:
     from dotenv import load_dotenv
 except ImportError:  # Keeps local imports safe until requirements are installed.
@@ -130,3 +132,90 @@ class MetadataConfig:
             self.experiment_notes_path,
         ):
             path.parent.mkdir(parents=True, exist_ok=True)
+
+
+@dataclass
+class CloudConfig:
+    aws_access_key_id: str | None = None
+    aws_secret_access_key: str | None = None
+    aws_region: str = "us-east-1"
+    aws_s3_bucket_name: str | None = None
+    allow_duplicate_documents: bool = False
+
+    raw_documents_prefix: str = "raw_documents/"
+    processed_documents_prefix: str = "processed_documents/"
+    model_artifacts_prefix: str = "model_artifacts/"
+    reports_prefix: str = "reports/"
+
+    def __post_init__(self) -> None:
+        self.aws_access_key_id = self.aws_access_key_id or os.getenv("AWS_ACCESS_KEY_ID")
+        self.aws_secret_access_key = self.aws_secret_access_key or os.getenv("AWS_SECRET_ACCESS_KEY")
+        self.aws_region = os.getenv("AWS_REGION", self.aws_region)
+        self.aws_s3_bucket_name = self.aws_s3_bucket_name or os.getenv("AWS_S3_BUCKET_NAME")
+        self.allow_duplicate_documents = os.getenv(
+            "ALLOW_DUPLICATE_DOCUMENTS",
+            str(self.allow_duplicate_documents),
+        ).strip().lower() in {"1", "true", "yes", "y"}
+
+    @property
+    def is_configured(self) -> bool:
+        return bool(self.aws_s3_bucket_name)
+
+
+@dataclass
+class DatabaseConfig:
+    postgres_host: str | None = None
+    postgres_port: int = 5432
+    postgres_db: str = "tmf_classifier"
+    postgres_user: str | None = None
+    postgres_password: str | None = None
+    database_url: str | None = None
+
+    def __post_init__(self) -> None:
+        self.postgres_host = self.postgres_host or os.getenv("POSTGRES_HOST")
+        self.postgres_port = int(os.getenv("POSTGRES_PORT", str(self.postgres_port)))
+        self.postgres_db = os.getenv("POSTGRES_DB", self.postgres_db)
+        self.postgres_user = self.postgres_user or os.getenv("POSTGRES_USER")
+        self.postgres_password = self.postgres_password or os.getenv("POSTGRES_PASSWORD")
+        self.database_url = self.database_url or os.getenv("DATABASE_URL")
+
+    @property
+    def sqlalchemy_url(self) -> str | None:
+        if self.database_url:
+            return self.database_url
+        if not all((self.postgres_host, self.postgres_user, self.postgres_password, self.postgres_db)):
+            return None
+        return (
+            URL.create(
+                "postgresql+psycopg2",
+                username=self.postgres_user,
+                password=self.postgres_password,
+                host=self.postgres_host,
+                port=self.postgres_port,
+                database=self.postgres_db,
+            )
+            .render_as_string(hide_password=False)
+        )
+
+    @property
+    def is_configured(self) -> bool:
+        return self.sqlalchemy_url is not None
+
+
+@dataclass
+class RetrainingConfig:
+    retrain_min_new_documents: int = 1
+    retrain_only_verified_data: bool = True
+    evaluation_threshold_macro_f1: float = 0.0
+
+    def __post_init__(self) -> None:
+        self.retrain_min_new_documents = int(
+            os.getenv("RETRAIN_MIN_NEW_DOCUMENTS", str(self.retrain_min_new_documents))
+        )
+        self.retrain_only_verified_data = os.getenv(
+            "RETRAIN_ONLY_VERIFIED_DATA",
+            str(self.retrain_only_verified_data),
+        ).strip().lower() in {"1", "true", "yes", "y"}
+        self.evaluation_threshold_macro_f1 = float(
+            os.getenv("RETRAIN_EVALUATION_THRESHOLD_MACRO_F1", str(self.evaluation_threshold_macro_f1))
+        )

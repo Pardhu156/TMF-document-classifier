@@ -193,3 +193,188 @@ pardhu156/tmf-classifier:latest
 ```
 
 Do not commit DockerHub credentials, DagsHub tokens, `.env`, raw datasets, or large model files directly to Git.
+
+## Stage 4: Cloud Persistence + Conditional Retraining Foundation
+
+Stage 4 adds cloud persistence and retraining orchestration without changing the existing local inference workflow.
+
+Included in Stage 4:
+
+- AWS S3 storage manager
+- PostgreSQL SQLAlchemy models and repository layer
+- idempotent document upload/ingestion pipeline
+- duplicate detection using SHA256 file hashes
+- chunk hashing using SHA256 text hashes
+- persisted document, chunk, prediction, chunk prediction, model version, and audit log records
+- conditional retraining coordinator
+- `/retrain` admin/manual endpoint
+- mock-based tests that do not hit real AWS or PostgreSQL
+
+### Required external services
+
+Create an AWS S3 bucket for cloud artifacts. Recommended folders/prefixes:
+
+```text
+raw_documents/
+processed_documents/
+model_artifacts/
+reports/
+```
+
+Create a PostgreSQL database:
+
+```text
+tmf_classifier
+```
+
+The application creates SQLAlchemy tables automatically when the database connection is configured.
+
+### Stage 4 environment variables
+
+Add these to `.env`:
+
+```env
+AWS_ACCESS_KEY_ID=your_aws_access_key_id
+AWS_SECRET_ACCESS_KEY=your_aws_secret_access_key
+AWS_REGION=us-east-1
+AWS_S3_BUCKET_NAME=tmf-classifier-stage4-bucket
+
+POSTGRES_HOST=localhost
+POSTGRES_PORT=5432
+POSTGRES_DB=tmf_classifier
+POSTGRES_USER=your_postgres_user
+POSTGRES_PASSWORD=your_postgres_password
+
+ALLOW_DUPLICATE_DOCUMENTS=False
+RETRAIN_MIN_NEW_DOCUMENTS=1
+RETRAIN_ONLY_VERIFIED_DATA=True
+```
+
+Never commit `.env`.
+
+### Manual cloud bootstrap uploads
+
+Use this only for assets that already exist locally and are not uploaded through `/predict-file`:
+
+- `data/` training source files
+- `artifacts/saved_bioclinicalbert_tmf_3class/`
+- `artifacts/label_encoder.pkl`
+- `metadata/`
+- evaluation reports from `artifacts/`
+
+Run:
+
+```bash
+python scripts/bootstrap_cloud_uploads.py
+```
+
+By default, existing S3 keys are skipped. To overwrite:
+
+```bash
+python scripts/bootstrap_cloud_uploads.py --overwrite
+```
+
+This uploads to:
+
+```text
+s3://tmf-classifier-stage4-bucket/raw_training_data/data/
+s3://tmf-classifier-stage4-bucket/model_artifacts/model_v1/
+s3://tmf-classifier-stage4-bucket/reports/
+```
+
+This bootstrap pipeline does not insert PostgreSQL rows. PostgreSQL is populated by `/predict-file`, manual verification, `/retrain`, and the application repository layer.
+
+### Cloud upload workflow
+
+```text
+POST /predict-file
+→ calculate file SHA256
+→ check PostgreSQL for duplicate file_hash
+→ upload raw file to S3 raw_documents/
+→ extract and clean text
+→ upload extracted text to S3 processed_documents/
+→ chunk document
+→ hash chunks
+→ run prediction
+→ save document/chunks/prediction/chunk predictions/audit log to PostgreSQL
+→ return API prediction response
+```
+
+If AWS/PostgreSQL are not configured, `/predict-file` still performs local extraction and inference for backward compatibility, but persistence is disabled.
+
+### Duplicate document workflow
+
+When `ALLOW_DUPLICATE_DOCUMENTS=False`:
+
+```text
+same file hash found
+→ skip S3 upload
+→ skip extraction
+→ skip prediction
+→ return existing document metadata and latest prediction
+→ create audit log
+```
+
+### Conditional retraining workflow
+
+Manual endpoint:
+
+```text
+POST /retrain
+```
+
+If no verified unused data exists:
+
+```json
+{
+  "status": "skipped",
+  "message": "No new verified data found. Retraining skipped."
+}
+```
+
+If verified unused data exists:
+
+```text
+fetch verified documents
+→ prepare next model version record, e.g. model_v2
+→ create audit log
+→ return retraining started metadata
+```
+
+### Manual admin review workflow
+
+For now, the project uses a simple admin/manual review endpoint. In production, this should be replaced with RBAC and authenticated reviewer permissions.
+
+After `/predict-file` stores a document as `predicted_unverified`, an admin can verify the trusted label:
+
+```text
+POST /documents/{doc_id}/verify
+```
+
+Example request:
+
+```json
+{
+  "verified_label": "protocol",
+  "reviewer": "admin",
+  "notes": "Reviewed document title and content."
+}
+```
+
+This updates:
+
+```text
+verified_label = protocol
+document_status = verified
+used_for_training = False
+```
+
+Then `/retrain` can use that `verified_label`. Retraining never uses the model's own `predicted_label` as training truth.
+
+The Stage 4 retraining pipeline intentionally does not overwrite the existing model. Future GPU fine-tuning should continue from the active checkpoint and save a new version under:
+
+```text
+model_artifacts/model_vX/
+```
+
+Only after the new model passes evaluation should it be marked active.

@@ -1,5 +1,6 @@
 from src.config import (
     DataIngestionConfig,
+    DatabaseConfig,
     EvaluationConfig,
     MLOpsConfig,
     MetadataConfig,
@@ -32,3 +33,14 @@ def test_api_related_configs_initialize() -> None:
 
     assert prediction_config.model_dir.parent.exists()
     assert evaluation_config.metrics_path.parent.exists()
+
+
+def test_database_config_escapes_special_password_characters() -> None:
+    config = DatabaseConfig(
+        postgres_host="localhost",
+        postgres_user="user",
+        postgres_password="p@ss/word+with:symbols",
+        postgres_db="tmf_classifier",
+    )
+
+    assert "p%40ss%2Fword+with%3Asymbols" in config.sqlalchemy_url

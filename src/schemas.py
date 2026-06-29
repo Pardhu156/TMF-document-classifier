@@ -34,3 +34,26 @@ class FilePredictionResponse(BaseModel):
     decision_status: str
     num_chunks: int
     chunk_predictions: dict[str, int]
+    duplicate: bool = False
+    document_status: str | None = None
+    persistence_enabled: bool = False
+    doc_id: int | None = None
+
+
+class DocumentVerificationRequest(BaseModel):
+    """Manual admin review payload for marking a document as verified."""
+
+    verified_label: str
+    reviewer: str | None = "admin"
+    notes: str | None = None
+
+
+class DocumentVerificationResponse(BaseModel):
+    """Response returned after a manual document verification."""
+
+    doc_id: int
+    filename: str
+    verified_label: str
+    document_status: str
+    used_for_training: bool
+    message: str
