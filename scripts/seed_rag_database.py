@@ -23,8 +23,10 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from src.config import RAGConfig
 from src.logger import logger
-from src.rag.master_data_ingestion import MasterDataIngestionPipeline, SUPPORTED_MASTER_EXTENSIONS
 from src.rag.vector_store import PgVectorStore
+
+
+SUPPORTED_SEED_EXTENSIONS = {".pdf", ".docx", ".txt"}
 
 
 def _wait_for_postgres(vector_store: PgVectorStore, timeout_seconds: int) -> None:
@@ -52,7 +54,7 @@ def _count_supported_documents(master_data_dir: Path) -> int:
     return sum(
         1
         for path in master_data_dir.rglob("*")
-        if path.is_file() and path.suffix.lower() in SUPPORTED_MASTER_EXTENSIONS
+        if path.is_file() and path.suffix.lower() in SUPPORTED_SEED_EXTENSIONS
     )
 
 
@@ -90,6 +92,8 @@ def main() -> None:
         master_data_dir,
         supported_document_count,
     )
+    from src.rag.master_data_ingestion import MasterDataIngestionPipeline
+
     result = MasterDataIngestionPipeline(rag_config=rag_config, vector_store=vector_store).run(
         master_data_dir=master_data_dir
     )

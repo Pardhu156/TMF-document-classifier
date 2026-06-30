@@ -775,5 +775,4 @@ document:{document_id}
 class:{predicted_class}
 ```
 
-
 If a new question is semantically similar to a previous question in the same scope and the similarity is above `SEMANTIC_CACHE_THRESHOLD`, the cached answer is returned.
