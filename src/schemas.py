@@ -38,6 +38,13 @@ class FilePredictionResponse(BaseModel):
     document_status: str | None = None
     persistence_enabled: bool = False
     doc_id: int | None = None
+    agentic_action: str | None = None
+    final_class: str | None = None
+    confidence_gap: float | None = None
+    decision_confidence: float | None = None
+    top_k_predictions: list[dict] | None = None
+    metadata_path: str | None = None
+    rag_ingestion_status: str | None = None
 
 
 class DocumentVerificationRequest(BaseModel):
@@ -57,3 +64,18 @@ class DocumentVerificationResponse(BaseModel):
     document_status: str
     used_for_training: bool
     message: str
+
+
+class ManualReviewCorrectionRequest(BaseModel):
+    """Payload for Stage 6 manual correction and filing."""
+
+    corrected_class: str
+    reviewer_id: str | None = "admin"
+    notes: str | None = None
+
+
+class TrainingApprovalRequest(BaseModel):
+    """Payload for approving/rejecting a document for future training."""
+
+    reviewer_id: str | None = "admin"
+    notes: str | None = None

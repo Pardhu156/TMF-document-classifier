@@ -146,6 +146,13 @@ class CloudConfig:
     processed_documents_prefix: str = "processed_documents/"
     model_artifacts_prefix: str = "model_artifacts/"
     reports_prefix: str = "reports/"
+    tmf_prefix: str = "agentic_tmf_workspace/tmf/"
+    pending_review_prefix: str = "agentic_tmf_workspace/pending_review/"
+    pending_training_prefix: str = "agentic_tmf_workspace/pending_training/"
+    approved_training_prefix: str = "agentic_tmf_workspace/approved_training/"
+    rejected_training_prefix: str = "agentic_tmf_workspace/rejected_training/"
+    metadata_prefix: str = "agentic_tmf_workspace/metadata/"
+    local_cloud_root: Path = PROJECT_ROOT / "agentic_tmf_workspace"
 
     def __post_init__(self) -> None:
         self.aws_access_key_id = self.aws_access_key_id or os.getenv("AWS_ACCESS_KEY_ID")
@@ -156,10 +163,27 @@ class CloudConfig:
             "ALLOW_DUPLICATE_DOCUMENTS",
             str(self.allow_duplicate_documents),
         ).strip().lower() in {"1", "true", "yes", "y"}
+        self.local_cloud_root = Path(os.getenv("LOCAL_CLOUD_ROOT", str(self.local_cloud_root)))
 
     @property
     def is_configured(self) -> bool:
         return bool(self.aws_s3_bucket_name)
+
+
+@dataclass
+class AgenticFilingConfig:
+    """Configuration for Stage 6 confidence-based filing decisions."""
+
+    auto_approval_threshold: float = 0.90
+    min_confidence_gap: float = 0.10
+    manual_review_queue_name: str = "manual_review:pending"
+
+    def __post_init__(self) -> None:
+        self.auto_approval_threshold = float(
+            os.getenv("AUTO_APPROVAL_THRESHOLD", str(self.auto_approval_threshold))
+        )
+        self.min_confidence_gap = float(os.getenv("MIN_CONFIDENCE_GAP", str(self.min_confidence_gap)))
+        self.manual_review_queue_name = os.getenv("MANUAL_REVIEW_QUEUE_NAME", self.manual_review_queue_name)
 
 
 @dataclass

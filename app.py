@@ -11,15 +11,17 @@ from fastapi import FastAPI, File, HTTPException, UploadFile
 from src.config import DatabaseConfig, MetadataConfig, MLOpsConfig, ModelTrainingConfig
 from src.exception import CustomException
 from src.logger import logger
-from src.pipeline.cloud_ingestion_pipeline import CloudIngestionPipeline
+from src.agentic_filing.pipeline import AgenticTMFFilingPipeline
 from src.pipeline.conditional_retraining_pipeline import ConditionalRetrainingPipeline
 from src.predict import predict_text
 from src.schemas import (
     DocumentVerificationRequest,
     DocumentVerificationResponse,
     FilePredictionResponse,
+    ManualReviewCorrectionRequest,
     PredictionRequest,
     PredictionResponse,
+    TrainingApprovalRequest,
 )
 from src.rag.metrics import log_rag_metrics_to_mlflow, rag_metrics as rag_metrics_tracker
 from src.rag.master_data_ingestion import MasterDataIngestionPipeline
@@ -122,7 +124,7 @@ async def predict_file(file: UploadFile = File(...)) -> dict[str, Any]:
         )
 
     try:
-        return await CloudIngestionPipeline().run(file)
+        return await AgenticTMFFilingPipeline().run(file)
     except HTTPException:
         raise
     except ValueError as error:
@@ -133,6 +135,102 @@ async def predict_file(file: UploadFile = File(...)) -> dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(error)) from error
     except Exception as error:
         logger.exception("File prediction failed for %s", safe_filename)
+        raise HTTPException(status_code=500, detail=str(CustomException(error, sys.exc_info()))) from error
+
+
+@app.get("/agentic/reviews")
+def list_manual_reviews() -> dict[str, Any]:
+    """List pending Stage 6 manual-review items.
+
+    This endpoint is intentionally auth-free for the current admin-only local
+    workflow. Add RBAC before exposing it publicly.
+    """
+    try:
+        return {"items": AgenticTMFFilingPipeline().list_pending_reviews()}
+    except Exception as error:
+        logger.exception("Manual review list endpoint failed")
+        raise HTTPException(status_code=500, detail=str(CustomException(error, sys.exc_info()))) from error
+
+
+@app.post("/agentic/reviews/{doc_id}/submit")
+def submit_manual_review(doc_id: int, request: ManualReviewCorrectionRequest) -> dict[str, Any]:
+    """Submit the corrected TMF class for a low-confidence document."""
+    try:
+        return AgenticTMFFilingPipeline().submit_manual_review(
+            doc_id=doc_id,
+            corrected_class=request.corrected_class,
+            reviewer_id=request.reviewer_id,
+            notes=request.notes,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except Exception as error:
+        logger.exception("Manual review submit endpoint failed")
+        raise HTTPException(status_code=500, detail=str(CustomException(error, sys.exc_info()))) from error
+
+
+@app.post("/agentic/training/{doc_id}/approve")
+def approve_training(doc_id: int, request: TrainingApprovalRequest) -> dict[str, Any]:
+    """Approve a finalized document for future training dataset export/retraining."""
+    try:
+        return AgenticTMFFilingPipeline().approve_for_training(
+            doc_id=doc_id,
+            approved=True,
+            reviewer_id=request.reviewer_id,
+            notes=request.notes,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except Exception as error:
+        logger.exception("Training approval endpoint failed")
+        raise HTTPException(status_code=500, detail=str(CustomException(error, sys.exc_info()))) from error
+
+
+@app.post("/agentic/training/{doc_id}/reject")
+def reject_training(doc_id: int, request: TrainingApprovalRequest) -> dict[str, Any]:
+    """Reject a finalized document from future training inclusion."""
+    try:
+        return AgenticTMFFilingPipeline().approve_for_training(
+            doc_id=doc_id,
+            approved=False,
+            reviewer_id=request.reviewer_id,
+            notes=request.notes,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except Exception as error:
+        logger.exception("Training rejection endpoint failed")
+        raise HTTPException(status_code=500, detail=str(CustomException(error, sys.exc_info()))) from error
+
+
+@app.post("/agentic/documents/{doc_id}/correct")
+def correct_auto_filed_document(doc_id: int, request: ManualReviewCorrectionRequest) -> dict[str, Any]:
+    """Correct an already auto-filed document.
+
+    This updates metadata and reuses the same final-class/RAG ingestion path as
+    manual review. In production, protect this endpoint with manager/admin RBAC.
+    """
+    try:
+        return AgenticTMFFilingPipeline().correct_auto_filed(
+            doc_id=doc_id,
+            corrected_class=request.corrected_class,
+            reviewer_id=request.reviewer_id,
+            notes=request.notes,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except Exception as error:
+        logger.exception("Auto-file correction endpoint failed")
+        raise HTTPException(status_code=500, detail=str(CustomException(error, sys.exc_info()))) from error
+
+
+@app.get("/agentic/metrics")
+def agentic_metrics() -> dict[str, Any]:
+    """Return Stage 6 filing/review/training-feedback metrics."""
+    try:
+        return {"metrics": AgenticTMFFilingPipeline().metrics()}
+    except Exception as error:
+        logger.exception("Agentic metrics endpoint failed")
         raise HTTPException(status_code=500, detail=str(CustomException(error, sys.exc_info()))) from error
 
 

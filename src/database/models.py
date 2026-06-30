@@ -34,6 +34,10 @@ class Document(Base):
 
     chunks: Mapped[list["Chunk"]] = relationship(back_populates="document", cascade="all, delete-orphan")
     predictions: Mapped[list["Prediction"]] = relationship(back_populates="document", cascade="all, delete-orphan")
+    metadata_records: Mapped[list["DocumentMetadata"]] = relationship(
+        back_populates="document",
+        cascade="all, delete-orphan",
+    )
 
 
 class Chunk(Base):
@@ -98,6 +102,32 @@ class ModelVersion(Base):
     metrics: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+
+class DocumentMetadata(Base):
+    __tablename__ = "document_metadata"
+
+    metadata_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    doc_id: Mapped[int] = mapped_column(ForeignKey("documents.doc_id"), index=True, nullable=False)
+    document_id: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
+    file_name: Mapped[str] = mapped_column(String(512), nullable=False)
+    file_hash: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    document_type: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    predicted_class: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    confidence_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    final_class: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    source: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    cloud_storage_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    metadata_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    status: Mapped[str] = mapped_column(String(64), nullable=False)
+    approval_status: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    rag_ingested: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    details: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+    document: Mapped["Document"] = relationship(back_populates="metadata_records")
 
 
 class AuditLog(Base):

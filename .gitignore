@@ -2,6 +2,8 @@
 venv/
 logs/
 reports/
+agentic_tmf_workspace/
+processed_documents/
 __pycache__/
 **pycache**/
 *.pyc

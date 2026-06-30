@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
 from typing import Any
 
 from src.cloud.s3_manager import S3Manager
@@ -11,7 +12,7 @@ from src.exception import CustomException
 from src.logger import logger
 
 
-DEFAULT_STAGE4_BUCKET = "tmf-classifier-stage4-bucket"
+DEFAULT_STAGE4_BUCKET = os.getenv("AWS_S3_BUCKET_NAME", "")
 
 
 class CloudBootstrapPipeline:
@@ -27,8 +28,9 @@ class CloudBootstrapPipeline:
         self,
         cloud_config: CloudConfig | None = None,
         s3_manager: S3Manager | None = None,
-        bucket_name: str = DEFAULT_STAGE4_BUCKET,
+        bucket_name: str | None = None,
     ) -> None:
+        bucket_name = bucket_name or DEFAULT_STAGE4_BUCKET
         self.cloud_config = cloud_config or CloudConfig(aws_s3_bucket_name=bucket_name)
         if not self.cloud_config.aws_s3_bucket_name:
             self.cloud_config.aws_s3_bucket_name = bucket_name

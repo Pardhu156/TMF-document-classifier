@@ -288,7 +288,7 @@ Add these to `.env`:
 AWS_ACCESS_KEY_ID=your_aws_access_key_id
 AWS_SECRET_ACCESS_KEY=your_aws_secret_access_key
 AWS_REGION=us-east-1
-AWS_S3_BUCKET_NAME=tmf-classifier-stage4-bucket
+AWS_S3_BUCKET_NAME=your_s3_bucket_name
 
 POSTGRES_HOST=localhost
 POSTGRES_PORT=5432
@@ -328,9 +328,9 @@ python scripts/bootstrap_cloud_uploads.py --overwrite
 This uploads to:
 
 ```text
-s3://tmf-classifier-stage4-bucket/raw_training_data/data/
-s3://tmf-classifier-stage4-bucket/model_artifacts/model_v1/
-s3://tmf-classifier-stage4-bucket/reports/
+s3://<your_s3_bucket_name>/raw_training_data/data/
+s3://<your_s3_bucket_name>/model_artifacts/model_v1/
+s3://<your_s3_bucket_name>/reports/
 ```
 
 This bootstrap pipeline does not insert PostgreSQL rows. PostgreSQL is populated by `/predict-file`, manual verification, `/retrain`, and the application repository layer.
@@ -776,3 +776,158 @@ class:{predicted_class}
 ```
 
 If a new question is semantically similar to a previous question in the same scope and the similarity is above `SEMANTIC_CACHE_THRESHOLD`, the cached answer is returned.
+
+## Stage 6: Agentic TMF Filer
+
+Stage 6 adds a confidence-based filing layer around the existing upload, prediction, cloud persistence, PostgreSQL, Redis, and RAG workflow.
+
+The existing classifier and RAG pipelines are reused. Stage 6 only decides whether a document can be auto-filed or must wait for human review.
+
+### Configuration
+
+Add these values to `.env`:
+
+```env
+AUTO_APPROVAL_THRESHOLD=0.90
+MIN_CONFIDENCE_GAP=0.10
+MANUAL_REVIEW_QUEUE_NAME=manual_review:pending
+```
+
+Decision rules:
+
+- if `confidence >= AUTO_APPROVAL_THRESHOLD` and top-1/top-2 confidence gap is safe, the document is auto-filed
+- otherwise the document is pushed to the Redis manual-review queue
+- low-confidence documents are not ingested into final RAG until a human confirms the final class
+
+### Agentic filing storage layout
+
+Stage 6 uses these logical S3 prefixes:
+
+```text
+agentic_tmf_workspace/
+├── tmf/<class>/
+├── pending_review/
+├── pending_training/<class>/
+├── approved_training/
+└── rejected_training/
+```
+
+The same structure is mirrored locally under `agentic_tmf_workspace/` for easier local review/debugging:
+
+```text
+agentic_tmf_workspace/
+├── tmf/<class>/
+├── pending_review/
+├── pending_training/<class>/
+├── approved_training/
+├── rejected_training/
+└── metadata/
+```
+
+The local `agentic_tmf_workspace/` folder is ignored by Git.
+
+New documents first go to `pending_training/` after filing. They are not approved for model training until an admin/manager approves them.
+
+Metadata is written in structured folders:
+
+```text
+agentic_tmf_workspace/metadata/<status>/<class_or_unclassified>/<doc_id>.json
+```
+
+If older Stage 6 files already exist in S3 under `cloud/`, migrate them once:
+
+```bash
+python scripts/migrate_agentic_s3_prefix.py --dry-run true
+python scripts/migrate_agentic_s3_prefix.py --dry-run false
+python scripts/migrate_agentic_s3_prefix.py --dry-run false --delete-old true
+```
+
+Only run the final command after confirming the copied files exist under `agentic_tmf_workspace/`.
+
+After manual review succeeds, the document is removed from `pending_review/` and copied into the final TMF class folder plus `pending_training/`. After training approval/rejection, the document is removed from `pending_training/` and copied into `approved_training/` or `rejected_training/`.
+
+During upload/review, progress messages are logged in the Uvicorn terminal, for example:
+
+```text
+Stage 6 progress [1/7]: calculated file hash
+Stage 6 progress [4/7]: running classifier on chunks
+Stage 6 progress [7/7]: metadata/audit saved
+```
+
+### Main upload flow
+
+Use the existing upload endpoint:
+
+```text
+POST /predict-file
+```
+
+High-confidence response includes:
+
+```json
+{
+  "agentic_action": "auto_filed",
+  "final_class": "protocol",
+  "document_status": "pending_training_approval",
+  "rag_ingestion_status": "rag_ingested"
+}
+```
+
+Low-confidence response includes:
+
+```json
+{
+  "agentic_action": "manual_review_required",
+  "final_class": null,
+  "document_status": "pending_review",
+  "rag_ingestion_status": "not_started"
+}
+```
+
+### Manual review endpoints
+
+List pending review items:
+
+```text
+GET /agentic/reviews
+```
+
+Submit a corrected class:
+
+```bash
+curl -X POST "http://127.0.0.1:8000/agentic/reviews/1/submit" \
+  -H "Content-Type: application/json" \
+  -d '{"corrected_class": "protocol", "reviewer_id": "admin"}'
+```
+
+After correction, the document is filed, metadata is updated, RAG ingestion runs, and the document becomes pending training approval.
+
+### Training feedback endpoints
+
+Approve for future training:
+
+```text
+POST /agentic/training/{doc_id}/approve
+```
+
+Reject from future training:
+
+```text
+POST /agentic/training/{doc_id}/reject
+```
+
+Correct an already auto-filed document:
+
+```text
+POST /agentic/documents/{doc_id}/correct
+```
+
+Metrics:
+
+```text
+GET /agentic/metrics
+```
+
+Metrics include auto-file rate, manual-review rate, duplicate count, average confidence, RAG additions, and training approval counts.
+
+RBAC/auth is intentionally not implemented yet. The code separates normal upload actions from admin/manager actions so these endpoints can be protected later.

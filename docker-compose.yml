@@ -46,6 +46,7 @@ services:
       LOCAL_EMBEDDING_DEVICE: cpu
       LOCAL_EMBEDDING_BATCH_SIZE: ${LOCAL_EMBEDDING_BATCH_SIZE:-8}
       RAG_EMBEDDING_DIMENSION: ${RAG_EMBEDDING_DIMENSION:-768}
+      LOCAL_CLOUD_ROOT: /app/agentic_tmf_workspace
     command: python scripts/seed_rag_database.py --master-data-dir /app/MASTER_DATA
     volumes:
       - ./MASTER_DATA:/app/MASTER_DATA:ro
@@ -83,6 +84,7 @@ services:
       - ./data:/app/data:ro
       - ./artifacts:/app/artifacts
       - ./reports:/app/reports
+      - ./agentic_tmf_workspace:/app/agentic_tmf_workspace
       - ./logs:/app/logs
     depends_on:
       postgres:

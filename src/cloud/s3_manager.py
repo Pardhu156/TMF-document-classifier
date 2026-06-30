@@ -87,6 +87,67 @@ class S3Manager:
         except Exception as error:
             raise CustomException(error) from error
 
+    def upload_text(self, text: str, key: str, content_type: str = "text/plain") -> str:
+        """Upload a UTF-8 text payload to S3 and return its s3:// URI."""
+        try:
+            client = self._require_client()
+            client.put_object(
+                Bucket=self.config.aws_s3_bucket_name,
+                Key=key,
+                Body=text.encode("utf-8"),
+                ContentType=content_type,
+            )
+            s3_uri = self.generate_s3_uri(key)
+            logger.info("Uploaded text payload to %s", s3_uri)
+            return s3_uri
+        except Exception as error:
+            raise CustomException(error) from error
+
+    def copy_object(self, source_key: str, destination_key: str) -> str:
+        """Copy an object inside the configured bucket and return the destination URI."""
+        try:
+            client = self._require_client()
+            client.copy_object(
+                Bucket=self.config.aws_s3_bucket_name,
+                CopySource={"Bucket": self.config.aws_s3_bucket_name, "Key": source_key},
+                Key=destination_key,
+            )
+            s3_uri = self.generate_s3_uri(destination_key)
+            logger.info("Copied s3://%s/%s to %s", self.config.aws_s3_bucket_name, source_key, s3_uri)
+            return s3_uri
+        except Exception as error:
+            raise CustomException(error) from error
+
+    def delete_object(self, key: str) -> None:
+        """Delete an object from S3. Use only after the replacement copy succeeds."""
+        try:
+            client = self._require_client()
+            client.delete_object(Bucket=self.config.aws_s3_bucket_name, Key=key)
+            logger.info("Deleted s3://%s/%s", self.config.aws_s3_bucket_name, key)
+        except Exception as error:
+            raise CustomException(error) from error
+
+    def list_keys(self, prefix: str) -> list[str]:
+        """List object keys under a prefix."""
+        try:
+            client = self._require_client()
+            keys: list[str] = []
+            paginator = client.get_paginator("list_objects_v2")
+            for page in paginator.paginate(Bucket=self.config.aws_s3_bucket_name, Prefix=prefix):
+                keys.extend(item["Key"] for item in page.get("Contents", []))
+            return keys
+        except Exception as error:
+            raise CustomException(error) from error
+
+    def read_text(self, key: str) -> str:
+        """Read a UTF-8 text object from S3."""
+        try:
+            client = self._require_client()
+            response = client.get_object(Bucket=self.config.aws_s3_bucket_name, Key=key)
+            return response["Body"].read().decode("utf-8")
+        except Exception as error:
+            raise CustomException(error) from error
+
     def ensure_prefix(self, prefix: str) -> str:
         """Create a harmless placeholder object for an S3 prefix if missing."""
         normalized_prefix = prefix.rstrip("/") + "/"
