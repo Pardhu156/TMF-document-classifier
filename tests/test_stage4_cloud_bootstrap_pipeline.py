@@ -57,7 +57,7 @@ def test_cloud_bootstrap_uploads_expected_asset_groups(tmp_path, monkeypatch) ->
     manifest = pipeline.run()
 
     assert manifest["bucket"] == "tmf-classifier-stage4-bucket"
-    assert set(manifest["uploads"]) == {"raw_training_data", "model_artifacts", "reports"}
+    assert set(manifest["uploads"]) == {"raw_training_data", "model_artifacts", "reports", "rag_artifact_prefixes"}
     assert any(prefix == "raw_training_data/data" for _, prefix, _ in fake_s3.uploaded_directories)
     assert any(prefix.startswith("model_artifacts/model_v1") for _, prefix, _ in fake_s3.uploaded_directories)
     assert any(key == "model_artifacts/model_v1/label_encoder.pkl" for _, key, _ in fake_s3.uploaded_files)

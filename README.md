@@ -148,27 +148,78 @@ pytest
 The tests do not run training. Prediction tests are skipped automatically if saved model artifacts are unavailable.
 
 
-### Docker
+### Docker Compose RAG stack
+
+For the full local RAG system, use Docker Compose instead of running only the API container.
+
+Expected setup:
 
 ```bash
-docker build -t tmf-classifier .
-docker run -p 8000:8000 tmf-classifier
+git clone <repo-url>
+cd <repo>
+cp .env.example .env
+# edit .env and add required keys, especially GEMINI_API_KEY
+dvc pull
+docker compose up --build
 ```
 
-The Docker image uses `requirements-api.txt`, which contains only API/inference dependencies and CPU-only PyTorch. The full `requirements.txt` remains for local development, testing, training utilities, DVC, and MLflow.
+The Compose stack starts:
 
-For easier demos, the Docker image includes only the inference artifacts required to run predictions:
+- `rag-app`: FastAPI application
+- `postgres`: PostgreSQL with pgvector for RAG documents/chunks
+- `redis`: exact and semantic cache
+- `db-seeder`: one-time idempotent seed job
 
-- `artifacts/saved_bioclinicalbert_tmf_3class/`
-- `artifacts/label_encoder.pkl`
-- `metadata/`
+The seeder checks PostgreSQL before indexing:
 
-Raw `data/`, generated CSVs, logs, `.env`, and DVC cache files are excluded from the image.
+- if `rag_chunks` already has rows, ingestion is skipped
+- if `rag_chunks` is empty, it indexes DVC-restored `MASTER_DATA/`
 
-### Docker Compose
+Data is not committed to GitHub and is not baked into the public Docker image. Run `dvc pull` first so these local folders exist:
+
+```text
+MASTER_DATA/
+data/
+artifacts/
+```
+
+Open the API after startup:
+
+```text
+http://127.0.0.1:8000/docs
+```
+
+Shutdown:
 
 ```bash
-docker-compose up --build
+docker compose down
+```
+
+Shutdown and remove local PostgreSQL volume:
+
+```bash
+docker compose down -v
+```
+
+Only use `down -v` when you intentionally want to delete the local indexed pgvector data.
+
+Troubleshooting:
+
+- If `db-seeder` says `MASTER_DATA directory was not found`, run `dvc pull`.
+- If PostgreSQL port `5434` is already used, change `POSTGRES_HOST_PORT` in `.env`.
+- If Redis port `6379` is already used, change `REDIS_HOST_PORT` in `.env`.
+- If `/rag/ask` returns a Gemini quota error, use a valid `GEMINI_API_KEY` or wait for quota reset.
+- If RAG returns no chunks, check seeder logs:
+
+```bash
+docker compose logs db-seeder
+```
+
+Rebuild from scratch:
+
+```bash
+docker compose down -v
+docker compose up --build
 ```
 
 ### GitHub Actions CI/CD
@@ -183,13 +234,13 @@ The workflow in `.github/workflows/ci-cd.yml`:
 
 GitHub Secrets required for DockerHub CD:
 
-- `DOCKER_USERNAME`
-- `DOCKER_PASSWORD`
+- `DOCKERHUB_USERNAME`
+- `DOCKERHUB_TOKEN`
 
 DockerHub image format:
 
 ```text
-pardhu156/tmf-classifier:latest
+<dockerhub_username>/tmf-classifier:latest
 ```
 
 Do not commit DockerHub credentials, DagsHub tokens, `.env`, raw datasets, or large model files directly to Git.
@@ -378,3 +429,350 @@ model_artifacts/model_vX/
 ```
 
 Only after the new model passes evaluation should it be marked active.
+
+## Stage 5: RAG + Redis Semantic Cache
+
+Stage 5 adds a document-level question-answering layer over uploaded/indexed TMF documents. It does not replace the classifier. Classification still predicts TMF class labels; RAG uses document chunks and embeddings so users can ask questions about the uploaded document corpus.
+
+Included in Stage 5:
+
+- local PubMedBERT embeddings for document chunks and user questions
+- PostgreSQL `pgvector` storage for chunk embeddings
+- PostgreSQL full-text search for exact clinical/TMF terms
+- hybrid retrieval using semantic search + keyword search
+- reranker interface with hybrid-score fallback
+- Gemini grounded answer generation
+- Redis semantic cache scoped by document, class, or all documents
+- RAG metrics and MLflow logging hooks
+- Swagger endpoints for RAG question answering
+- manual `MASTER_DATA` ingestion for the trusted knowledge base
+
+### Stage 5 environment variables
+
+Add these to `.env`:
+
+```env
+MASTER_DATA_DIR=MASTER_DATA
+AUTO_INDEX_MASTER_DATA=False
+
+GEMINI_API_KEY=your_gemini_api_key
+GEMINI_GENERATION_MODEL=models/gemini-flash-lite-latest
+
+EMBEDDING_PROVIDER=local
+LOCAL_EMBEDDING_MODEL=NeuML/pubmedbert-base-embeddings
+LOCAL_MODEL_DIR=/models/pubmedbert-base-embeddings
+LOCAL_EMBEDDING_DEVICE=cpu
+LOCAL_EMBEDDING_BATCH_SIZE=8
+RAG_EMBEDDING_DIMENSION=768
+RAG_SEMANTIC_TOP_K=10
+RAG_KEYWORD_TOP_K=10
+RAG_FINAL_TOP_K=5
+RAG_RERANKER_ENABLED=False
+
+SEMANTIC_CACHE_ENABLED=True
+SEMANTIC_CACHE_THRESHOLD=0.85
+SEMANTIC_CACHE_TTL_SECONDS=86400
+REDIS_URL=redis://localhost:6379/0
+
+MODEL_BACKUP_S3_PREFIX=rag-artifacts/embedding-models/pubmedbert/
+RAG_ARTIFACTS_S3_PREFIX=rag-artifacts/
+RAG_INGESTION_REPORTS_S3_PREFIX=rag-artifacts/ingestion-reports/
+RAG_EVALUATION_S3_PREFIX=rag-artifacts/rag-evaluation/
+RAG_FAILED_INGESTIONS_S3_PREFIX=rag-artifacts/failed-ingestions/
+```
+
+PostgreSQL must have the `pgvector` extension available. The app runs:
+
+```sql
+CREATE EXTENSION IF NOT EXISTS vector;
+```
+
+### Trusted master knowledge base
+
+Create a local folder for trusted RAG source documents:
+
+```text
+MASTER_DATA/
+```
+
+Put trusted `.pdf`, `.docx`, or `.txt` documents there. These are indexed with:
+
+```text
+source_type = MASTER_DATA
+verification_status = verified
+```
+
+The app does not index this folder automatically by default:
+
+```env
+AUTO_INDEX_MASTER_DATA=False
+```
+
+Run indexing manually through either Swagger/API:
+
+```bash
+curl -X POST "http://127.0.0.1:8000/rag/index-master-data"
+```
+
+or CLI:
+
+```bash
+python scripts/index_master_data.py
+```
+
+Optional path override:
+
+```bash
+python scripts/index_master_data.py --master-data-dir /path/to/MASTER_DATA
+```
+
+The pipeline computes a file hash and skips files already indexed into pgvector, so rerunning it is safe.
+
+### Optional: index the labeled `data/` folder into pgvector
+
+If you want your existing labeled training folders to be searchable by RAG, run:
+
+```bash
+python scripts/index_training_data.py
+```
+
+Optional path override:
+
+```bash
+python scripts/index_training_data.py --data-dir /path/to/data
+```
+
+Expected structure:
+
+```text
+data/
+├── protocol/
+├── safety_report/
+└── statistical_analysis_plan/
+```
+
+These documents are indexed with:
+
+```text
+source_type = TRAINING_DATA
+verification_status = verified
+predicted_class = <class folder name>
+```
+
+This is separate from `MASTER_DATA`. Default RAG questions still search only `MASTER_DATA`. To include training data in retrieval, use `scope="all"` or a class-scoped request.
+
+### Embedding model change and re-indexing
+
+Current RAG embeddings use:
+
+```text
+NeuML/pubmedbert-base-embeddings
+```
+
+This local model produces `768`-dimension vectors. Local indexing defaults to CPU with a small batch size to avoid Apple MPS/GPU out-of-memory errors. Do not mix old Gemini `3072`-dimension vectors with PubMedBERT vectors. After changing embedding models, reset the RAG vector tables and re-index:
+
+```bash
+python scripts/reset_rag_vector_store.py
+python scripts/index_master_data.py
+```
+
+Optional training data indexing:
+
+```bash
+python scripts/index_training_data.py
+```
+
+### RAG indexing flow
+
+When `/predict-file` receives a new document and PostgreSQL + local embeddings are configured:
+
+```text
+upload document
+→ extract text
+→ clean and chunk text
+→ classify document
+→ embed chunks using local PubMedBERT
+→ store chunks + vectors in PostgreSQL pgvector
+→ store predicted_class as metadata
+→ update Redis document status
+```
+
+Redis document status uses:
+
+```text
+doc:status:{document_id}
+```
+
+Statuses include:
+
+```text
+uploaded → extracted → chunked → embedded → indexed
+```
+
+If RAG indexing fails, the classifier upload flow still returns its prediction and logs a warning.
+
+### Docker model packaging
+
+The Docker image downloads and packages the PubMedBERT embedding model during build:
+
+```text
+/models/pubmedbert-base-embeddings
+```
+
+At runtime the app loads from `LOCAL_MODEL_DIR`, so requests do not download from Hugging Face.
+
+Build locally:
+
+```bash
+docker build -t pardhu156/tmf-classifier:latest .
+```
+
+### S3 RAG artifacts
+
+RAG artifacts use the existing Stage 4 S3 bucket configured by `AWS_S3_BUCKET_NAME`. The app does not create a new bucket.
+
+Idempotent prefixes:
+
+```text
+rag-artifacts/
+rag-artifacts/embedding-models/pubmedbert/
+rag-artifacts/ingestion-reports/
+rag-artifacts/rag-evaluation/
+rag-artifacts/failed-ingestions/
+```
+
+Use S3 for:
+
+- embedding model backup
+- indexing summaries/reports
+- evaluation reports
+- failed ingestion logs
+
+Do not store active vector embeddings in S3. Active embeddings stay in PostgreSQL + pgvector.
+
+Upload optional RAG artifacts:
+
+```bash
+python scripts/upload_rag_artifacts.py
+```
+
+The Stage 4 bootstrap script also ensures these RAG prefixes exist:
+
+```bash
+python scripts/bootstrap_cloud_uploads.py
+```
+
+### DockerHub CI/CD
+
+Current CI/CD flow:
+
+```text
+GitHub push
+→ GitHub Actions
+→ build Docker image with local PubMedBERT model
+→ push image to Docker Hub
+```
+
+Required GitHub secrets:
+
+- `DOCKERHUB_USERNAME`
+- `DOCKERHUB_TOKEN`
+
+Cloud deployment can be added later. The current workflow only builds/tests and pushes the Docker image to DockerHub.
+
+### RAG retrieval scoping
+
+RAG uses metadata filtering before pgvector similarity search or PostgreSQL full-text search. This avoids pulling irrelevant chunks from unrelated documents.
+
+Supported metadata filters:
+
+- `source_type`
+- `verification_status`
+- `document_id`
+- `predicted_class`
+- `file_name`
+
+Retrieval priority:
+
+1. If `document_id` is provided, search only that document.
+2. If no `document_id` is provided, try fuzzy filename matching from the question.
+3. If no filename match is found, default to `scope="master"` and search only `MASTER_DATA`.
+
+Optional `scope` values:
+
+```text
+document
+master
+verified
+all
+class
+```
+
+Default:
+
+```text
+scope = master
+```
+
+Use `scope="all"` only when you explicitly want retrieval across master data and uploaded documents.
+
+### RAG API
+
+Ask a question across all indexed documents:
+
+```bash
+curl -X POST "http://127.0.0.1:8000/rag/ask" \
+  -H "Content-Type: application/json" \
+  -d '{"question": "What is the study objective?", "scope": "all"}'
+```
+
+Ask within one document:
+
+```bash
+curl -X POST "http://127.0.0.1:8000/rag/ask" \
+  -H "Content-Type: application/json" \
+  -d '{"question": "What is the primary endpoint?", "document_id": "1"}'
+```
+
+Ask from trusted master data only, which is the default:
+
+```bash
+curl -X POST "http://127.0.0.1:8000/rag/ask" \
+  -H "Content-Type: application/json" \
+  -d '{"question": "What is the study objective?"}'
+```
+
+Ask within one predicted TMF class:
+
+```bash
+curl -X POST "http://127.0.0.1:8000/rag/ask" \
+  -H "Content-Type: application/json" \
+  -d '{"question": "What are the inclusion criteria?", "predicted_class": "protocol", "scope": "class"}'
+```
+
+Other RAG endpoints:
+
+```text
+GET /rag/documents
+GET /rag/status/{document_id}
+GET /rag/metrics
+POST /rag/index-master-data
+```
+
+The answer generator is instructed to use only retrieved chunks. If there is not enough evidence, it returns:
+
+```text
+I could not find enough information in the uploaded documents.
+```
+
+### Semantic cache behavior
+
+The Redis semantic cache stores question embeddings and answers. It is scoped to prevent reusing an answer from the wrong document set:
+
+```text
+all_documents
+document:{document_id}
+class:{predicted_class}
+```
+
+If a new question is semantically similar to a previous question in the same scope and the similarity is above `SEMANTIC_CACHE_THRESHOLD`, the cached answer is returned.

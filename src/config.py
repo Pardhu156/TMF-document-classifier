@@ -177,7 +177,8 @@ class DatabaseConfig:
         self.postgres_db = os.getenv("POSTGRES_DB", self.postgres_db)
         self.postgres_user = self.postgres_user or os.getenv("POSTGRES_USER")
         self.postgres_password = self.postgres_password or os.getenv("POSTGRES_PASSWORD")
-        self.database_url = self.database_url or os.getenv("DATABASE_URL")
+        if not self.database_url and not any((self.postgres_host, self.postgres_user, self.postgres_password)):
+            self.database_url = os.getenv("DATABASE_URL")
 
     @property
     def sqlalchemy_url(self) -> str | None:
@@ -219,3 +220,98 @@ class RetrainingConfig:
         self.evaluation_threshold_macro_f1 = float(
             os.getenv("RETRAIN_EVALUATION_THRESHOLD_MACRO_F1", str(self.evaluation_threshold_macro_f1))
         )
+
+
+@dataclass
+class RAGConfig:
+    master_data_dir: Path = PROJECT_ROOT / "MASTER_DATA"
+    auto_index_master_data: bool = False
+    embedding_provider: str = "local"
+    local_embedding_model: str = "NeuML/pubmedbert-base-embeddings"
+    local_model_dir: Path = Path("/models/pubmedbert-base-embeddings")
+    local_embedding_device: str = "cpu"
+    local_embedding_batch_size: int = 8
+    gemini_api_key: str | None = None
+    gemini_embedding_model: str = "models/gemini-embedding-001"
+    gemini_generation_model: str = "models/gemini-flash-lite-latest"
+    embedding_dimension: int = 768
+    semantic_top_k: int = 10
+    keyword_top_k: int = 10
+    final_top_k: int = 5
+    reranker_enabled: bool = False
+    semantic_cache_enabled: bool = True
+    semantic_cache_threshold: float = 0.85
+    redis_url: str | None = None
+    semantic_cache_ttl_seconds: int = 86400
+    model_backup_s3_bucket: str | None = None
+    model_backup_s3_prefix: str = "rag-artifacts/embedding-models/pubmedbert/"
+    rag_artifacts_s3_prefix: str = "rag-artifacts/"
+    rag_ingestion_reports_s3_prefix: str = "rag-artifacts/ingestion-reports/"
+    rag_evaluation_s3_prefix: str = "rag-artifacts/rag-evaluation/"
+    rag_failed_ingestions_s3_prefix: str = "rag-artifacts/failed-ingestions/"
+
+    def __post_init__(self) -> None:
+        self.master_data_dir = Path(os.getenv("MASTER_DATA_DIR", str(self.master_data_dir)))
+        self.auto_index_master_data = os.getenv(
+            "AUTO_INDEX_MASTER_DATA",
+            str(self.auto_index_master_data),
+        ).strip().lower() in {"1", "true", "yes", "y"}
+        self.embedding_provider = os.getenv("EMBEDDING_PROVIDER", self.embedding_provider).strip().lower()
+        self.local_embedding_model = os.getenv("LOCAL_EMBEDDING_MODEL", self.local_embedding_model)
+        self.local_model_dir = Path(os.getenv("LOCAL_MODEL_DIR", str(self.local_model_dir)))
+        self.local_embedding_device = os.getenv("LOCAL_EMBEDDING_DEVICE", self.local_embedding_device)
+        self.local_embedding_batch_size = int(
+            os.getenv("LOCAL_EMBEDDING_BATCH_SIZE", str(self.local_embedding_batch_size))
+        )
+        self.gemini_api_key = self.gemini_api_key or os.getenv("GEMINI_API_KEY")
+        self.gemini_embedding_model = os.getenv("GEMINI_EMBEDDING_MODEL", self.gemini_embedding_model)
+        self.gemini_generation_model = os.getenv("GEMINI_GENERATION_MODEL", self.gemini_generation_model)
+        self.embedding_dimension = int(os.getenv("RAG_EMBEDDING_DIMENSION", str(self.embedding_dimension)))
+        self.semantic_top_k = int(os.getenv("RAG_SEMANTIC_TOP_K", str(self.semantic_top_k)))
+        self.keyword_top_k = int(os.getenv("RAG_KEYWORD_TOP_K", str(self.keyword_top_k)))
+        self.final_top_k = int(os.getenv("RAG_FINAL_TOP_K", str(self.final_top_k)))
+        self.reranker_enabled = os.getenv("RAG_RERANKER_ENABLED", str(self.reranker_enabled)).strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "y",
+        }
+        self.semantic_cache_enabled = os.getenv(
+            "SEMANTIC_CACHE_ENABLED",
+            str(self.semantic_cache_enabled),
+        ).strip().lower() in {"1", "true", "yes", "y"}
+        self.semantic_cache_threshold = float(
+            os.getenv("SEMANTIC_CACHE_THRESHOLD", str(self.semantic_cache_threshold))
+        )
+        self.redis_url = self.redis_url or os.getenv("REDIS_URL")
+        self.semantic_cache_ttl_seconds = int(
+            os.getenv("SEMANTIC_CACHE_TTL_SECONDS", str(self.semantic_cache_ttl_seconds))
+        )
+        self.model_backup_s3_bucket = (
+            self.model_backup_s3_bucket
+            or os.getenv("MODEL_BACKUP_S3_BUCKET")
+            or os.getenv("AWS_S3_BUCKET_NAME")
+        )
+        self.model_backup_s3_prefix = os.getenv("MODEL_BACKUP_S3_PREFIX", self.model_backup_s3_prefix)
+        self.rag_artifacts_s3_prefix = os.getenv("RAG_ARTIFACTS_S3_PREFIX", self.rag_artifacts_s3_prefix)
+        self.rag_ingestion_reports_s3_prefix = os.getenv(
+            "RAG_INGESTION_REPORTS_S3_PREFIX",
+            self.rag_ingestion_reports_s3_prefix,
+        )
+        self.rag_evaluation_s3_prefix = os.getenv("RAG_EVALUATION_S3_PREFIX", self.rag_evaluation_s3_prefix)
+        self.rag_failed_ingestions_s3_prefix = os.getenv(
+            "RAG_FAILED_INGESTIONS_S3_PREFIX",
+            self.rag_failed_ingestions_s3_prefix,
+        )
+
+    @property
+    def gemini_configured(self) -> bool:
+        return bool(self.gemini_api_key)
+
+    @property
+    def redis_configured(self) -> bool:
+        return bool(self.redis_url)
+
+    @property
+    def uses_local_embeddings(self) -> bool:
+        return self.embedding_provider == "local"

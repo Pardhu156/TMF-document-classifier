@@ -130,6 +130,14 @@ class CloudIngestionPipeline:
                     chunk_rows = self._persist_chunks(document["doc_id"], chunk_texts)
                     self._persist_prediction(document["doc_id"], prediction)
                     self._persist_chunk_predictions(document["doc_id"], chunk_rows, chunk_results)
+                    self._index_rag_document(
+                        document["doc_id"],
+                        safe_filename,
+                        response["predicted_label"],
+                        chunk_texts,
+                        uploaded_by,
+                        file_hash,
+                    )
                     self.repository.save_audit_log(
                         event_type="document_ingested",
                         entity_type="document",
@@ -265,3 +273,31 @@ class CloudIngestionPipeline:
                 for chunk_row, chunk_result in zip(chunk_rows, chunk_results)
             ],
         )
+
+    def _index_rag_document(
+        self,
+        doc_id: int,
+        filename: str,
+        predicted_class: str,
+        chunk_texts: list[str],
+        uploaded_by: str | None,
+        file_hash: str | None,
+    ) -> None:
+        try:
+            from src.rag.service import RAGIndexer
+
+            if not RAGIndexer.is_configured():
+                logger.info("RAG indexing skipped for doc_id=%s because Gemini/PostgreSQL is not configured.", doc_id)
+                return
+            RAGIndexer().index_document(
+                document_id=str(doc_id),
+                file_name=filename,
+                predicted_class=predicted_class,
+                chunk_texts=chunk_texts,
+                uploaded_by=uploaded_by,
+                source_type="PREDICT_UPLOAD",
+                verification_status="unverified",
+                file_hash=file_hash,
+            )
+        except Exception as error:
+            logger.warning("RAG indexing failed for doc_id=%s without blocking classification upload: %s", doc_id, error)

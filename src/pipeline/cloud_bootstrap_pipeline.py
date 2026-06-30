@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from src.cloud.s3_manager import S3Manager
-from src.config import CloudConfig, DataIngestionConfig, EvaluationConfig, MetadataConfig, ModelTrainingConfig
+from src.config import CloudConfig, DataIngestionConfig, EvaluationConfig, MetadataConfig, ModelTrainingConfig, RAGConfig
 from src.exception import CustomException
 from src.logger import logger
 
@@ -37,6 +37,7 @@ class CloudBootstrapPipeline:
         self.training_config = ModelTrainingConfig()
         self.evaluation_config = EvaluationConfig()
         self.metadata_config = MetadataConfig()
+        self.rag_config = RAGConfig()
 
     def run(self, skip_existing: bool = True) -> dict[str, Any]:
         """Upload existing local assets to S3 and return a manifest."""
@@ -48,12 +49,14 @@ class CloudBootstrapPipeline:
                     "raw_training_data": [],
                     "model_artifacts": [],
                     "reports": [],
+                    "rag_artifact_prefixes": [],
                 },
             }
 
             manifest["uploads"]["raw_training_data"] = self.upload_training_data(skip_existing=skip_existing)
             manifest["uploads"]["model_artifacts"] = self.upload_model_artifacts(skip_existing=skip_existing)
             manifest["uploads"]["reports"] = self.upload_reports(skip_existing=skip_existing)
+            manifest["uploads"]["rag_artifact_prefixes"] = self.ensure_rag_artifact_prefixes()
 
             logger.info("Cloud bootstrap upload complete: %s", manifest)
             return manifest
@@ -127,6 +130,20 @@ class CloudBootstrapPipeline:
             else:
                 logger.warning("Skipping report upload because %s does not exist.", report_path)
         return uploaded
+
+    def ensure_rag_artifact_prefixes(self) -> list[str]:
+        """Ensure optional RAG artifact prefixes exist in the existing Stage 4 bucket."""
+        if not hasattr(self.s3_manager, "ensure_prefix"):
+            logger.info("S3 manager does not support ensure_prefix; skipping RAG prefix initialization.")
+            return []
+        prefixes = (
+            self.rag_config.rag_artifacts_s3_prefix,
+            self.rag_config.model_backup_s3_prefix,
+            self.rag_config.rag_ingestion_reports_s3_prefix,
+            self.rag_config.rag_evaluation_s3_prefix,
+            self.rag_config.rag_failed_ingestions_s3_prefix,
+        )
+        return [self.s3_manager.ensure_prefix(prefix) for prefix in prefixes]
 
     def _upload_file_if_needed(self, local_path: Path, key: str, skip_existing: bool = True) -> str:
         if skip_existing and self.s3_manager.file_exists(key):

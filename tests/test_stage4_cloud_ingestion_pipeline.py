@@ -98,6 +98,7 @@ def test_cloud_ingestion_pipeline_new_file_persists(monkeypatch) -> None:
             "decision_status": "auto_classify",
         },
     )
+    monkeypatch.setattr("src.rag.service.RAGIndexer.is_configured", classmethod(lambda cls: False))
     repo = FakeRepository(duplicate=False)
     s3 = FakeS3Manager()
     pipeline = CloudIngestionPipeline(

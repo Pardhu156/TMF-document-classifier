@@ -21,6 +21,17 @@ from src.schemas import (
     PredictionRequest,
     PredictionResponse,
 )
+from src.rag.metrics import log_rag_metrics_to_mlflow, rag_metrics as rag_metrics_tracker
+from src.rag.master_data_ingestion import MasterDataIngestionPipeline
+from src.rag.schemas import (
+    RAGAskRequest,
+    RAGAskResponse,
+    RAGDocumentResponse,
+    RAGIndexMasterDataResponse,
+    RAGMetricsResponse,
+    RAGStatusResponse,
+)
+from src.rag.service import RAGService
 from src.utils import load_json
 
 
@@ -167,6 +178,17 @@ def verify_document(doc_id: int, request: DocumentVerificationRequest) -> dict[s
         if document is None:
             raise HTTPException(status_code=404, detail=f"Document {doc_id} not found.")
 
+        try:
+            from src.rag.vector_store import PgVectorStore
+
+            PgVectorStore().update_document_metadata(
+                document_id=str(doc_id),
+                predicted_class=request.verified_label.strip(),
+                verification_status="verified",
+            )
+        except Exception as error:
+            logger.warning("Document %s verified, but RAG metadata sync was skipped: %s", doc_id, error)
+
         repository.save_audit_log(
             event_type="document_verified",
             entity_type="document",
@@ -191,4 +213,91 @@ def verify_document(doc_id: int, request: DocumentVerificationRequest) -> dict[s
         raise
     except Exception as error:
         logger.exception("Document verification failed")
+        raise HTTPException(status_code=500, detail=str(CustomException(error, sys.exc_info()))) from error
+
+
+@app.post("/rag/ask", response_model=RAGAskResponse)
+def rag_ask(request: RAGAskRequest) -> dict[str, Any]:
+    """Ask questions over already indexed uploaded documents."""
+    try:
+        if not RAGService.is_configured():
+            raise HTTPException(status_code=503, detail="RAG is not configured. Set PostgreSQL and GEMINI_API_KEY.")
+        return RAGService().ask(
+            question=request.question,
+            document_id=request.document_id,
+            predicted_class=request.predicted_class,
+            file_name=request.file_name,
+            source_type=request.source_type,
+            verification_status=request.verification_status,
+            scope=request.scope,
+        )
+    except HTTPException:
+        raise
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except Exception as error:
+        logger.exception("RAG ask endpoint failed")
+        raise HTTPException(status_code=500, detail=str(CustomException(error, sys.exc_info()))) from error
+
+
+@app.get("/rag/documents", response_model=list[RAGDocumentResponse])
+def rag_documents() -> list[dict[str, Any]]:
+    """Return all indexed RAG documents."""
+    try:
+        if not RAGService.is_configured():
+            raise HTTPException(status_code=503, detail="RAG is not configured. Set PostgreSQL and GEMINI_API_KEY.")
+        return RAGService().list_documents()
+    except HTTPException:
+        raise
+    except Exception as error:
+        logger.exception("RAG documents endpoint failed")
+        raise HTTPException(status_code=500, detail=str(CustomException(error, sys.exc_info()))) from error
+
+
+@app.get("/rag/status/{document_id}", response_model=RAGStatusResponse)
+def rag_status(document_id: str) -> dict[str, str]:
+    """Return indexing status for a document."""
+    try:
+        if not RAGService.is_configured():
+            raise HTTPException(status_code=503, detail="RAG is not configured. Set PostgreSQL and GEMINI_API_KEY.")
+        return {"document_id": document_id, "status": RAGService().status(document_id)}
+    except HTTPException:
+        raise
+    except Exception as error:
+        logger.exception("RAG status endpoint failed")
+        raise HTTPException(status_code=500, detail=str(CustomException(error, sys.exc_info()))) from error
+
+
+@app.get("/rag/metrics", response_model=RAGMetricsResponse)
+def rag_metrics() -> dict[str, Any]:
+    """Return basic in-process RAG metrics."""
+    try:
+        metrics = rag_metrics_tracker.snapshot()
+        log_rag_metrics_to_mlflow(
+            params={"component": "rag", "source": "api_metrics_endpoint"},
+            metrics=metrics,
+        )
+        return {"metrics": metrics}
+    except Exception as error:
+        logger.exception("RAG metrics endpoint failed")
+        raise HTTPException(status_code=500, detail=str(CustomException(error, sys.exc_info()))) from error
+
+
+@app.post("/rag/index-master-data", response_model=RAGIndexMasterDataResponse)
+def rag_index_master_data() -> dict[str, Any]:
+    """Manually index trusted MASTER_DATA files into pgvector."""
+    try:
+        if not MasterDataIngestionPipeline.is_configured():
+            raise HTTPException(
+                status_code=503,
+                detail="Master-data indexing requires PostgreSQL and GEMINI_API_KEY.",
+            )
+        return MasterDataIngestionPipeline().run()
+    except HTTPException:
+        raise
+    except CustomException as error:
+        logger.exception("MASTER_DATA indexing endpoint failed")
+        raise HTTPException(status_code=500, detail=str(error)) from error
+    except Exception as error:
+        logger.exception("MASTER_DATA indexing endpoint failed")
         raise HTTPException(status_code=500, detail=str(CustomException(error, sys.exc_info()))) from error

@@ -1,6 +1,7 @@
 .env
 venv/
 logs/
+reports/
 __pycache__/
 **pycache**/
 *.pyc
@@ -22,3 +23,7 @@ artifacts/*/
 data/*
 !data/.gitignore
 /data
+
+# RAG source documents and local model cache are private/large.
+MASTER_DATA/
+models/

@@ -19,9 +19,10 @@ def _model_artifacts_available() -> bool:
     )
 
 
-def test_predict_file_valid_txt_upload() -> None:
+def test_predict_file_valid_txt_upload(monkeypatch) -> None:
     if not _model_artifacts_available():
         pytest.skip("Saved model artifacts are not available.")
+    monkeypatch.setattr("src.rag.service.RAGIndexer.is_configured", classmethod(lambda cls: False))
 
     response = client.post(
         "/predict-file",

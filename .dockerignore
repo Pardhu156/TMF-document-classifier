@@ -13,5 +13,8 @@ artifacts/*
 !artifacts/saved_bioclinicalbert_tmf_3class/**
 !artifacts/label_encoder.pkl
 data
+MASTER_DATA
+models
+reports
 research
 *.dvc

@@ -87,6 +87,16 @@ class S3Manager:
         except Exception as error:
             raise CustomException(error) from error
 
+    def ensure_prefix(self, prefix: str) -> str:
+        """Create a harmless placeholder object for an S3 prefix if missing."""
+        normalized_prefix = prefix.rstrip("/") + "/"
+        placeholder_key = normalized_prefix + ".keep"
+        if not self.file_exists(placeholder_key):
+            client = self._require_client()
+            client.put_object(Bucket=self.config.aws_s3_bucket_name, Key=placeholder_key, Body=b"")
+            logger.info("Created S3 prefix placeholder: %s", self.generate_s3_uri(placeholder_key))
+        return self.generate_s3_uri(normalized_prefix)
+
     def file_exists(self, key: str) -> bool:
         """Return True if an S3 object exists."""
         try:

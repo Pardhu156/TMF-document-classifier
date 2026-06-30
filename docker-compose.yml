@@ -1,7 +1,97 @@
 services:
-  tmf_classifier:
-    build: .
-    container_name: tmf_classifier_api
+  postgres:
+    image: pgvector/pgvector:pg15
+    container_name: tmf_pgvector
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-tmf_classifier}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
     ports:
-      - "8000:8000"
+      - "${POSTGRES_HOST_PORT:-5434}:5432"
+    volumes:
+      - tmf_pgvector_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-tmf_classifier}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    container_name: tmf_redis
+    ports:
+      - "${REDIS_HOST_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  db-seeder:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: tmf_rag_db_seeder
+    env_file:
+      - .env
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      REDIS_URL: redis://redis:6379/0
+      MASTER_DATA_DIR: /app/MASTER_DATA
+      LOCAL_MODEL_DIR: /models/pubmedbert-base-embeddings
+      EMBEDDING_PROVIDER: local
+      LOCAL_EMBEDDING_DEVICE: cpu
+      LOCAL_EMBEDDING_BATCH_SIZE: ${LOCAL_EMBEDDING_BATCH_SIZE:-8}
+      RAG_EMBEDDING_DIMENSION: ${RAG_EMBEDDING_DIMENSION:-768}
+    command: python scripts/seed_rag_database.py --master-data-dir /app/MASTER_DATA
+    volumes:
+      - ./MASTER_DATA:/app/MASTER_DATA:ro
+      - ./data:/app/data:ro
+      - ./artifacts:/app/artifacts
+      - ./reports:/app/reports
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: "no"
+
+  rag-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: tmf_rag_app
+    env_file:
+      - .env
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      REDIS_URL: redis://redis:6379/0
+      MASTER_DATA_DIR: /app/MASTER_DATA
+      LOCAL_MODEL_DIR: /models/pubmedbert-base-embeddings
+      EMBEDDING_PROVIDER: local
+      LOCAL_EMBEDDING_DEVICE: cpu
+      LOCAL_EMBEDDING_BATCH_SIZE: ${LOCAL_EMBEDDING_BATCH_SIZE:-8}
+      RAG_EMBEDDING_DIMENSION: ${RAG_EMBEDDING_DIMENSION:-768}
+    ports:
+      - "${APP_HOST_PORT:-8000}:8000"
+    volumes:
+      - ./MASTER_DATA:/app/MASTER_DATA:ro
+      - ./data:/app/data:ro
+      - ./artifacts:/app/artifacts
+      - ./reports:/app/reports
+      - ./logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      db-seeder:
+        condition: service_completed_successfully
     command: uvicorn app:app --host 0.0.0.0 --port 8000
+
+volumes:
+  tmf_pgvector_data:

@@ -1,0 +1,6 @@
+outs:
+- md5: 2714c4ff0dc1ec8ad7200c29579d8dc2.dir
+  size: 59987876
+  nfiles: 45
+  hash: md5
+  path: MASTER_DATA
