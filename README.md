@@ -111,7 +111,12 @@ http://127.0.0.1:8000/docs
 Example prediction request:
 
 ```bash
+TOKEN=$(curl -s -X POST "http://127.0.0.1:8000/auth/login" \
+  -H "Content-Type: application/json" \
+  -d '{"email": "user@test.com", "password": "user123"}' | python -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+
 curl -X POST "http://127.0.0.1:8000/predict" \
+  -H "Authorization: Bearer ${TOKEN}" \
   -H "Content-Type: application/json" \
   -d '{"text": "This document describes study objectives and inclusion criteria."}'
 ```
@@ -120,6 +125,7 @@ Example file-upload prediction request:
 
 ```bash
 curl -X POST "http://127.0.0.1:8000/predict-file" \
+  -H "Authorization: Bearer ${TOKEN}" \
   -F "file=@/path/to/study_protocol.pdf"
 ```
 
@@ -172,6 +178,7 @@ The Compose stack starts:
 
 The seeder checks PostgreSQL before indexing:
 
+- it creates/updates development demo users idempotently
 - if `rag_chunks` already has rows, ingestion is skipped
 - if `rag_chunks` is empty, it indexes DVC-restored `MASTER_DATA/`
 
@@ -394,7 +401,7 @@ fetch verified documents
 
 ### Manual admin review workflow
 
-For now, the project uses a simple admin/manual review endpoint. In production, this should be replaced with RBAC and authenticated reviewer permissions.
+The manual admin review endpoint is protected by Stage 7.1 RBAC and requires an Admin token.
 
 After `/predict-file` stores a document as `predicted_unverified`, an admin can verify the trusted label:
 
@@ -511,7 +518,8 @@ AUTO_INDEX_MASTER_DATA=False
 Run indexing manually through either Swagger/API:
 
 ```bash
-curl -X POST "http://127.0.0.1:8000/rag/index-master-data"
+curl -X POST "http://127.0.0.1:8000/rag/index-master-data" \
+  -H "Authorization: Bearer ${ADMIN_TOKEN}"
 ```
 
 or CLI:
@@ -930,4 +938,124 @@ GET /agentic/metrics
 
 Metrics include auto-file rate, manual-review rate, duplicate count, average confidence, RAG additions, and training approval counts.
 
-RBAC/auth is intentionally not implemented yet. The code separates normal upload actions from admin/manager actions so these endpoints can be protected later.
+Stage 7.1 RBAC now protects upload, RAG, review, training approval, metrics, and audit/user-management APIs according to role.
+
+## Stage 7.1: Authentication + RBAC
+
+Stage 7.1 adds database-backed users, secure password hashing, bearer-token authentication, and role-based access control without changing the classifier, RAG, or agentic filing internals.
+
+### Demo login credentials
+
+These accounts are for local development and testing only:
+
+| Email | Password | Role |
+| --- | --- | --- |
+| `user@test.com` | `user123` | User |
+| `manager@test.com` | `manager123` | Manager |
+| `admin@test.com` | `admin123` | Admin |
+
+Production should replace demo accounts with proper user management or enterprise SSO.
+
+### Auth environment variables
+
+Add these to `.env`:
+
+```env
+JWT_SECRET_KEY=replace_with_a_long_random_secret
+JWT_ALGORITHM=HS256
+ACCESS_TOKEN_EXPIRE_MINUTES=60
+```
+
+Never commit real JWT secrets.
+
+### Authentication flow
+
+Login with email and password:
+
+```bash
+curl -X POST "http://127.0.0.1:8000/auth/login" \
+  -H "Content-Type: application/json" \
+  -d '{"email": "admin@test.com", "password": "admin123"}'
+```
+
+The response includes:
+
+- `access_token`
+- `token_type`
+- `expires_in_minutes`
+- safe `user` details with no password hash
+- `dashboard`, one of `User Dashboard`, `Manager Dashboard`, or `Admin Dashboard`
+
+Use the token on protected endpoints:
+
+```bash
+curl "http://127.0.0.1:8000/auth/me" \
+  -H "Authorization: Bearer <access_token>"
+```
+
+Logout is stateless:
+
+```text
+POST /auth/logout
+```
+
+Clients should discard the bearer token. Expired or invalid tokens return `401`; insufficient roles return `403`.
+
+### RBAC permissions
+
+User:
+
+- `POST /predict`
+- `POST /predict-file`
+- `GET /documents/my-uploads`
+- `POST /rag/ask`
+- `GET /rag/documents`
+- `GET /rag/status/{document_id}`
+
+Manager:
+
+- everything User can do
+- `GET /agentic/reviews`
+- `POST /agentic/reviews/{doc_id}/submit`
+- `POST /agentic/documents/{doc_id}/correct`
+
+Admin:
+
+- everything Manager can do
+- `GET /users`
+- `POST /users`
+- `PATCH /users/{user_id}`
+- `POST /documents/{doc_id}/verify`
+- `POST /agentic/training/{doc_id}/approve`
+- `POST /agentic/training/{doc_id}/reject`
+- `GET /agentic/metrics`
+- `GET /rag/metrics`
+- `POST /rag/index-master-data`
+- `GET /audit-logs`
+- `POST /retrain`
+
+Public health/probe endpoints remain open: `/`, `/health`, and `/model-info`.
+
+### Managing users manually
+
+Admin API:
+
+```bash
+curl -X POST "http://127.0.0.1:8000/users" \
+  -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Study Lead","email":"lead@test.com","password":"lead123","role":"Manager","is_active":true}'
+
+curl -X PATCH "http://127.0.0.1:8000/users/4" \
+  -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{"role":"Admin"}'
+```
+
+Database/CLI path:
+
+```bash
+python scripts/seed_demo_users.py
+```
+
+`scripts/seed_demo_users.py` is idempotent and is run automatically by `docker compose up --build` through the `db-seeder` service.

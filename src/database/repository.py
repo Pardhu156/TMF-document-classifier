@@ -9,7 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from src.database.db_connection import create_session_factory, session_scope
-from src.database.models import AuditLog, Chunk, ChunkPrediction, Document, DocumentMetadata, ModelVersion, Prediction
+from src.database.models import AuditLog, Chunk, ChunkPrediction, Document, DocumentMetadata, ModelVersion, Prediction, User
 
 
 def _as_dict(model) -> dict | None:
@@ -54,6 +54,45 @@ class TMFRepository:
         with self._scope() as session:
             document = session.get(Document, doc_id)
             return _as_dict(document)
+
+    def get_user_by_email(self, email: str) -> dict | None:
+        with self._scope() as session:
+            user = session.execute(select(User).where(User.email == email.lower())).scalar_one_or_none()
+            return _as_dict(user)
+
+    def get_user_by_id(self, user_id: int) -> dict | None:
+        with self._scope() as session:
+            return _as_dict(session.get(User, user_id))
+
+    def list_users(self) -> list[dict]:
+        with self._scope() as session:
+            users = session.execute(select(User).order_by(User.created_at.desc())).scalars().all()
+            return [_as_dict(user) for user in users]
+
+    def create_user(self, user_data: dict) -> dict:
+        with self._scope() as session:
+            user = User(**{**user_data, "email": user_data["email"].lower()})
+            session.add(user)
+            session.flush()
+            return _as_dict(user)
+
+    def upsert_user(self, user_data: dict) -> dict:
+        existing = self.get_user_by_email(user_data["email"])
+        if existing:
+            return self.update_user(existing["id"], user_data) or existing
+        return self.create_user(user_data)
+
+    def update_user(self, user_id: int, values: dict) -> dict | None:
+        allowed_fields = {"name", "email", "hashed_password", "role", "is_active"}
+        with self._scope() as session:
+            user = session.get(User, user_id)
+            if user is None:
+                return None
+            for key, value in values.items():
+                if key in allowed_fields and value is not None:
+                    setattr(user, key, value.lower() if key == "email" else value)
+            session.flush()
+            return _as_dict(user)
 
     def update_document_status(
         self,
@@ -162,6 +201,15 @@ class TMFRepository:
             ).scalars().all()
             return [_as_dict(document) for document in documents]
 
+    def list_documents_by_uploader(self, uploaded_by: str) -> list[dict]:
+        with self._scope() as session:
+            documents = session.execute(
+                select(Document)
+                .where(Document.uploaded_by == uploaded_by)
+                .order_by(Document.upload_timestamp.desc())
+            ).scalars().all()
+            return [_as_dict(document) for document in documents]
+
     def get_new_verified_documents(self, limit: int | None = None) -> list[dict]:
         with self._scope() as session:
             query = (
@@ -215,6 +263,13 @@ class TMFRepository:
             session.add(audit_log)
             session.flush()
             return _as_dict(audit_log)
+
+    def list_audit_logs(self, limit: int = 100) -> list[dict]:
+        with self._scope() as session:
+            audit_logs = session.execute(
+                select(AuditLog).order_by(AuditLog.created_at.desc()).limit(limit)
+            ).scalars().all()
+            return [_as_dict(audit_log) for audit_log in audit_logs]
 
     def agentic_metrics(self) -> dict:
         with self._scope() as session:

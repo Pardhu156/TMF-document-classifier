@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 
 from app import app
 from src.config import PredictionConfig
+from tests.auth_helpers import auth_headers, install_auth_override
 
 
 client = TestClient(app)
@@ -31,10 +32,12 @@ def test_api_health_and_model_info_flow() -> None:
 def test_api_prediction_flow_with_saved_model() -> None:
     if not _model_artifacts_available():
         pytest.skip("Saved model artifacts are not available.")
+    install_auth_override()
 
     response = client.post(
         "/predict",
         json={"text": "The protocol defines treatment procedures and study objectives."},
+        headers=auth_headers("User"),
     )
 
     assert response.status_code == 200

@@ -1,5 +1,7 @@
 """Pydantic schemas for the TMF Classifier API."""
 
+from datetime import datetime
+
 from pydantic import BaseModel
 
 
@@ -79,3 +81,51 @@ class TrainingApprovalRequest(BaseModel):
 
     reviewer_id: str | None = "admin"
     notes: str | None = None
+
+
+class LoginRequest(BaseModel):
+    """Email/password login payload."""
+
+    email: str
+    password: str
+
+
+class UserResponse(BaseModel):
+    """Safe user payload returned by auth and admin user APIs."""
+
+    id: int
+    name: str
+    email: str
+    role: str
+    is_active: bool
+    created_at: datetime
+
+
+class AuthResponse(BaseModel):
+    """Response returned after a successful login."""
+
+    access_token: str
+    token_type: str = "bearer"
+    expires_in_minutes: int
+    user: UserResponse
+    dashboard: str
+
+
+class UserCreateRequest(BaseModel):
+    """Admin payload for creating a user."""
+
+    name: str
+    email: str
+    password: str
+    role: str
+    is_active: bool = True
+
+
+class UserUpdateRequest(BaseModel):
+    """Admin payload for updating a user."""
+
+    name: str | None = None
+    email: str | None = None
+    password: str | None = None
+    role: str | None = None
+    is_active: bool | None = None

@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
 
 import app as api_app
+from tests.auth_helpers import auth_headers, install_auth_override
 
 
 client = TestClient(api_app.app)
@@ -69,9 +70,14 @@ class DisabledRAGService(FakeRAGService):
 
 
 def test_rag_ask_endpoint(monkeypatch) -> None:
+    install_auth_override()
     monkeypatch.setattr(api_app, "RAGService", FakeRAGService)
 
-    response = client.post("/rag/ask", json={"question": "What does this document describe?", "document_id": "1"})
+    response = client.post(
+        "/rag/ask",
+        json={"question": "What does this document describe?", "document_id": "1"},
+        headers=auth_headers("User"),
+    )
 
     assert response.status_code == 200
     payload = response.json()
@@ -80,49 +86,59 @@ def test_rag_ask_endpoint(monkeypatch) -> None:
 
 
 def test_rag_ask_empty_question_returns_400(monkeypatch) -> None:
+    install_auth_override()
     monkeypatch.setattr(api_app, "RAGService", FakeRAGService)
 
-    response = client.post("/rag/ask", json={"question": "   "})
+    response = client.post("/rag/ask", json={"question": "   "}, headers=auth_headers("User"))
 
     assert response.status_code == 400
 
 
 def test_rag_documents_endpoint(monkeypatch) -> None:
+    install_auth_override()
     monkeypatch.setattr(api_app, "RAGService", FakeRAGService)
 
-    response = client.get("/rag/documents")
+    response = client.get("/rag/documents", headers=auth_headers("User"))
 
     assert response.status_code == 200
     assert response.json()[0]["document_id"] == "1"
 
 
 def test_rag_status_endpoint(monkeypatch) -> None:
+    install_auth_override()
     monkeypatch.setattr(api_app, "RAGService", FakeRAGService)
 
-    response = client.get("/rag/status/1")
+    response = client.get("/rag/status/1", headers=auth_headers("User"))
 
     assert response.status_code == 200
     assert response.json() == {"document_id": "1", "status": "indexed"}
 
 
 def test_rag_metrics_endpoint_does_not_require_rag_configuration(monkeypatch) -> None:
+    install_auth_override()
     monkeypatch.setattr(api_app, "log_rag_metrics_to_mlflow", lambda params, metrics: None)
 
-    response = client.get("/rag/metrics")
+    response = client.get("/rag/metrics", headers=auth_headers("Admin"))
 
     assert response.status_code == 200
     assert "total_questions" in response.json()["metrics"]
 
 
 def test_rag_ask_returns_503_when_not_configured(monkeypatch) -> None:
+    install_auth_override()
     monkeypatch.setattr(api_app, "RAGService", DisabledRAGService)
 
-    response = client.post("/rag/ask", json={"question": "What does this document describe?"})
+    response = client.post(
+        "/rag/ask",
+        json={"question": "What does this document describe?"},
+        headers=auth_headers("User"),
+    )
 
     assert response.status_code == 503
 
 
 def test_rag_index_master_data_endpoint(monkeypatch) -> None:
+    install_auth_override()
     class FakeMasterDataPipeline:
         @classmethod
         def is_configured(cls) -> bool:
@@ -140,7 +156,7 @@ def test_rag_index_master_data_endpoint(monkeypatch) -> None:
 
     monkeypatch.setattr(api_app, "MasterDataIngestionPipeline", FakeMasterDataPipeline)
 
-    response = client.post("/rag/index-master-data")
+    response = client.post("/rag/index-master-data", headers=auth_headers("Admin"))
 
     assert response.status_code == 200
     assert response.json()["source_type"] == "MASTER_DATA"

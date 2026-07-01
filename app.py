@@ -4,11 +4,26 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 
-from src.config import DatabaseConfig, MetadataConfig, MLOpsConfig, ModelTrainingConfig
+from src.auth import (
+    ROLE_ADMIN,
+    ROLE_MANAGER,
+    ROLE_USER,
+    authenticate_user,
+    create_access_token,
+    get_auth_repository,
+    get_current_user,
+    hash_password,
+    normalize_role,
+    public_user,
+    require_min_role,
+    require_roles,
+)
+from src.config import AuthConfig, DatabaseConfig, MetadataConfig, MLOpsConfig, ModelTrainingConfig
+from src.database.repository import TMFRepository
 from src.exception import CustomException
 from src.logger import logger
 from src.agentic_filing.pipeline import AgenticTMFFilingPipeline
@@ -18,10 +33,15 @@ from src.schemas import (
     DocumentVerificationRequest,
     DocumentVerificationResponse,
     FilePredictionResponse,
+    AuthResponse,
+    LoginRequest,
     ManualReviewCorrectionRequest,
     PredictionRequest,
     PredictionResponse,
     TrainingApprovalRequest,
+    UserCreateRequest,
+    UserResponse,
+    UserUpdateRequest,
 )
 from src.rag.metrics import log_rag_metrics_to_mlflow, rag_metrics as rag_metrics_tracker
 from src.rag.master_data_ingestion import MasterDataIngestionPipeline
@@ -44,6 +64,17 @@ app = FastAPI(
 )
 
 SUPPORTED_UPLOAD_EXTENSIONS = {".pdf", ".docx", ".txt"}
+AnyAuthenticatedUser = Annotated[dict, Depends(require_roles([ROLE_USER, ROLE_MANAGER, ROLE_ADMIN]))]
+ManagerUser = Annotated[dict, Depends(require_min_role(ROLE_MANAGER))]
+AdminUser = Annotated[dict, Depends(require_roles([ROLE_ADMIN]))]
+
+
+def _dashboard_for_role(role: str) -> str:
+    return {
+        ROLE_USER: "User Dashboard",
+        ROLE_MANAGER: "Manager Dashboard",
+        ROLE_ADMIN: "Admin Dashboard",
+    }[role]
 
 
 def _safe_load_json(path: Path) -> dict[str, Any]:
@@ -95,8 +126,94 @@ def model_info() -> dict[str, Any]:
     return _get_model_info()
 
 
+@app.post("/auth/login", response_model=AuthResponse)
+def login(request: LoginRequest, repository: Annotated[TMFRepository, Depends(get_auth_repository)]) -> dict[str, Any]:
+    """Authenticate with email/password and return a bearer token."""
+    user = authenticate_user(request.email, request.password, repository)
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid email or password.")
+    config = AuthConfig()
+    return {
+        "access_token": create_access_token(user, config),
+        "token_type": "bearer",
+        "expires_in_minutes": config.access_token_expire_minutes,
+        "user": public_user(user),
+        "dashboard": _dashboard_for_role(user["role"]),
+    }
+
+
+@app.post("/auth/logout")
+def logout(current_user: Annotated[dict, Depends(get_current_user)]) -> dict[str, str]:
+    """Stateless logout hook for clients to discard their bearer token."""
+    return {"message": f"Logged out {current_user['email']}. Discard the bearer token client-side."}
+
+
+@app.get("/auth/me", response_model=UserResponse)
+def auth_me(current_user: Annotated[dict, Depends(get_current_user)]) -> dict[str, Any]:
+    """Return the currently authenticated user."""
+    return public_user(current_user)
+
+
+@app.get("/users", response_model=list[UserResponse])
+def list_users(
+    current_user: AdminUser,
+    repository: Annotated[TMFRepository, Depends(get_auth_repository)],
+) -> list[dict[str, Any]]:
+    """List users. Admin-only."""
+    return [public_user(user) for user in repository.list_users()]
+
+
+@app.post("/users", response_model=UserResponse)
+def create_user(
+    request: UserCreateRequest,
+    current_user: AdminUser,
+    repository: Annotated[TMFRepository, Depends(get_auth_repository)],
+) -> dict[str, Any]:
+    """Create a user. Admin-only."""
+    try:
+        user = repository.create_user(
+            {
+                "name": request.name.strip(),
+                "email": request.email.strip().lower(),
+                "hashed_password": hash_password(request.password),
+                "role": normalize_role(request.role),
+                "is_active": request.is_active,
+            }
+        )
+        return public_user(user)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except Exception as error:
+        logger.exception("Create user endpoint failed")
+        raise HTTPException(status_code=400, detail="Could not create user.") from error
+
+
+@app.patch("/users/{user_id}", response_model=UserResponse)
+def update_user(
+    user_id: int,
+    request: UserUpdateRequest,
+    current_user: AdminUser,
+    repository: Annotated[TMFRepository, Depends(get_auth_repository)],
+) -> dict[str, Any]:
+    """Update a user profile, status, password, or role. Admin-only."""
+    try:
+        values = request.dict(exclude_unset=True)
+        if "role" in values and values["role"] is not None:
+            values["role"] = normalize_role(values["role"])
+        if "password" in values:
+            values["hashed_password"] = hash_password(values.pop("password"))
+        user = repository.update_user(user_id, values)
+        if user is None:
+            raise HTTPException(status_code=404, detail=f"User {user_id} not found.")
+        return public_user(user)
+    except HTTPException:
+        raise
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
 @app.post("/predict", response_model=PredictionResponse)
-def predict(request: PredictionRequest) -> dict[str, float | str]:
+def predict(request: PredictionRequest, current_user: AnyAuthenticatedUser) -> dict[str, float | str]:
     """Predict the TMF class for one text input."""
     try:
         if not request.text.strip():
@@ -113,7 +230,7 @@ def predict(request: PredictionRequest) -> dict[str, float | str]:
 
 
 @app.post("/predict-file", response_model=FilePredictionResponse)
-async def predict_file(file: UploadFile = File(...)) -> dict[str, Any]:
+async def predict_file(current_user: AnyAuthenticatedUser, file: UploadFile = File(...)) -> dict[str, Any]:
     """Predict a complete uploaded TMF document using chunk-level aggregation."""
     safe_filename = Path(file.filename or "uploaded_document").name
     suffix = Path(safe_filename).suffix.lower()
@@ -124,7 +241,7 @@ async def predict_file(file: UploadFile = File(...)) -> dict[str, Any]:
         )
 
     try:
-        return await AgenticTMFFilingPipeline().run(file)
+        return await AgenticTMFFilingPipeline().run(file, uploaded_by=current_user["email"])
     except HTTPException:
         raise
     except ValueError as error:
@@ -138,13 +255,18 @@ async def predict_file(file: UploadFile = File(...)) -> dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(CustomException(error, sys.exc_info()))) from error
 
 
-@app.get("/agentic/reviews")
-def list_manual_reviews() -> dict[str, Any]:
-    """List pending Stage 6 manual-review items.
+@app.get("/documents/my-uploads")
+def my_uploads(
+    current_user: AnyAuthenticatedUser,
+    repository: Annotated[TMFRepository, Depends(get_auth_repository)],
+) -> dict[str, Any]:
+    """Return document upload/status rows for the current user."""
+    return {"items": repository.list_documents_by_uploader(current_user["email"])}
 
-    This endpoint is intentionally auth-free for the current admin-only local
-    workflow. Add RBAC before exposing it publicly.
-    """
+
+@app.get("/agentic/reviews")
+def list_manual_reviews(current_user: ManagerUser) -> dict[str, Any]:
+    """List pending Stage 6 manual-review items."""
     try:
         return {"items": AgenticTMFFilingPipeline().list_pending_reviews()}
     except Exception as error:
@@ -153,7 +275,7 @@ def list_manual_reviews() -> dict[str, Any]:
 
 
 @app.post("/agentic/reviews/{doc_id}/submit")
-def submit_manual_review(doc_id: int, request: ManualReviewCorrectionRequest) -> dict[str, Any]:
+def submit_manual_review(doc_id: int, request: ManualReviewCorrectionRequest, current_user: ManagerUser) -> dict[str, Any]:
     """Submit the corrected TMF class for a low-confidence document."""
     try:
         return AgenticTMFFilingPipeline().submit_manual_review(
@@ -170,7 +292,7 @@ def submit_manual_review(doc_id: int, request: ManualReviewCorrectionRequest) ->
 
 
 @app.post("/agentic/training/{doc_id}/approve")
-def approve_training(doc_id: int, request: TrainingApprovalRequest) -> dict[str, Any]:
+def approve_training(doc_id: int, request: TrainingApprovalRequest, current_user: AdminUser) -> dict[str, Any]:
     """Approve a finalized document for future training dataset export/retraining."""
     try:
         return AgenticTMFFilingPipeline().approve_for_training(
@@ -187,7 +309,7 @@ def approve_training(doc_id: int, request: TrainingApprovalRequest) -> dict[str,
 
 
 @app.post("/agentic/training/{doc_id}/reject")
-def reject_training(doc_id: int, request: TrainingApprovalRequest) -> dict[str, Any]:
+def reject_training(doc_id: int, request: TrainingApprovalRequest, current_user: AdminUser) -> dict[str, Any]:
     """Reject a finalized document from future training inclusion."""
     try:
         return AgenticTMFFilingPipeline().approve_for_training(
@@ -204,12 +326,8 @@ def reject_training(doc_id: int, request: TrainingApprovalRequest) -> dict[str, 
 
 
 @app.post("/agentic/documents/{doc_id}/correct")
-def correct_auto_filed_document(doc_id: int, request: ManualReviewCorrectionRequest) -> dict[str, Any]:
-    """Correct an already auto-filed document.
-
-    This updates metadata and reuses the same final-class/RAG ingestion path as
-    manual review. In production, protect this endpoint with manager/admin RBAC.
-    """
+def correct_auto_filed_document(doc_id: int, request: ManualReviewCorrectionRequest, current_user: ManagerUser) -> dict[str, Any]:
+    """Correct an already auto-filed document."""
     try:
         return AgenticTMFFilingPipeline().correct_auto_filed(
             doc_id=doc_id,
@@ -225,7 +343,7 @@ def correct_auto_filed_document(doc_id: int, request: ManualReviewCorrectionRequ
 
 
 @app.get("/agentic/metrics")
-def agentic_metrics() -> dict[str, Any]:
+def agentic_metrics(current_user: AdminUser) -> dict[str, Any]:
     """Return Stage 6 filing/review/training-feedback metrics."""
     try:
         return {"metrics": AgenticTMFFilingPipeline().metrics()}
@@ -235,7 +353,7 @@ def agentic_metrics() -> dict[str, Any]:
 
 
 @app.post("/retrain")
-def retrain() -> dict[str, Any]:
+def retrain(current_user: AdminUser) -> dict[str, Any]:
     """Manually start the conditional retraining pipeline.
 
     This endpoint only checks for verified new training data and prepares the
@@ -257,12 +375,8 @@ def retrain() -> dict[str, Any]:
 
 
 @app.post("/documents/{doc_id}/verify", response_model=DocumentVerificationResponse)
-def verify_document(doc_id: int, request: DocumentVerificationRequest) -> dict[str, Any]:
-    """Manual admin review endpoint for verified retraining labels.
-
-    This is intentionally simple for the current admin-only workflow. In a
-    production app, replace this with RBAC/authenticated review permissions.
-    """
+def verify_document(doc_id: int, request: DocumentVerificationRequest, current_user: AdminUser) -> dict[str, Any]:
+    """Manual admin review endpoint for verified retraining labels."""
     try:
         if not request.verified_label.strip():
             raise HTTPException(status_code=400, detail="verified_label must be a non-empty string")
@@ -315,7 +429,7 @@ def verify_document(doc_id: int, request: DocumentVerificationRequest) -> dict[s
 
 
 @app.post("/rag/ask", response_model=RAGAskResponse)
-def rag_ask(request: RAGAskRequest) -> dict[str, Any]:
+def rag_ask(request: RAGAskRequest, current_user: AnyAuthenticatedUser) -> dict[str, Any]:
     """Ask questions over already indexed uploaded documents."""
     try:
         if not RAGService.is_configured():
@@ -339,7 +453,7 @@ def rag_ask(request: RAGAskRequest) -> dict[str, Any]:
 
 
 @app.get("/rag/documents", response_model=list[RAGDocumentResponse])
-def rag_documents() -> list[dict[str, Any]]:
+def rag_documents(current_user: AnyAuthenticatedUser) -> list[dict[str, Any]]:
     """Return all indexed RAG documents."""
     try:
         if not RAGService.is_configured():
@@ -353,7 +467,7 @@ def rag_documents() -> list[dict[str, Any]]:
 
 
 @app.get("/rag/status/{document_id}", response_model=RAGStatusResponse)
-def rag_status(document_id: str) -> dict[str, str]:
+def rag_status(document_id: str, current_user: AnyAuthenticatedUser) -> dict[str, str]:
     """Return indexing status for a document."""
     try:
         if not RAGService.is_configured():
@@ -367,7 +481,7 @@ def rag_status(document_id: str) -> dict[str, str]:
 
 
 @app.get("/rag/metrics", response_model=RAGMetricsResponse)
-def rag_metrics() -> dict[str, Any]:
+def rag_metrics(current_user: AdminUser) -> dict[str, Any]:
     """Return basic in-process RAG metrics."""
     try:
         metrics = rag_metrics_tracker.snapshot()
@@ -382,7 +496,7 @@ def rag_metrics() -> dict[str, Any]:
 
 
 @app.post("/rag/index-master-data", response_model=RAGIndexMasterDataResponse)
-def rag_index_master_data() -> dict[str, Any]:
+def rag_index_master_data(current_user: AdminUser) -> dict[str, Any]:
     """Manually index trusted MASTER_DATA files into pgvector."""
     try:
         if not MasterDataIngestionPipeline.is_configured():
@@ -399,3 +513,13 @@ def rag_index_master_data() -> dict[str, Any]:
     except Exception as error:
         logger.exception("MASTER_DATA indexing endpoint failed")
         raise HTTPException(status_code=500, detail=str(CustomException(error, sys.exc_info()))) from error
+
+
+@app.get("/audit-logs")
+def audit_logs(
+    current_user: AdminUser,
+    repository: Annotated[TMFRepository, Depends(get_auth_repository)],
+    limit: int = 100,
+) -> dict[str, Any]:
+    """Return audit logs. Admin-only."""
+    return {"items": repository.list_audit_logs(limit=max(1, min(limit, 500)))}

@@ -47,7 +47,7 @@ services:
       LOCAL_EMBEDDING_BATCH_SIZE: ${LOCAL_EMBEDDING_BATCH_SIZE:-8}
       RAG_EMBEDDING_DIMENSION: ${RAG_EMBEDDING_DIMENSION:-768}
       LOCAL_CLOUD_ROOT: /app/agentic_tmf_workspace
-    command: python scripts/seed_rag_database.py --master-data-dir /app/MASTER_DATA
+    command: sh -c "python scripts/seed_demo_users.py && python scripts/seed_rag_database.py --master-data-dir /app/MASTER_DATA"
     volumes:
       - ./MASTER_DATA:/app/MASTER_DATA:ro
       - ./data:/app/data:ro

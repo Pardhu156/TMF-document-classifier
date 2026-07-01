@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 
 from app import app
 from src.config import PredictionConfig
+from tests.auth_helpers import auth_headers, install_auth_override
 
 
 client = TestClient(app)
@@ -22,6 +23,7 @@ def _model_artifacts_available() -> bool:
 def test_predict_file_valid_txt_upload(monkeypatch) -> None:
     if not _model_artifacts_available():
         pytest.skip("Saved model artifacts are not available.")
+    install_auth_override()
     monkeypatch.setattr("src.rag.service.RAGIndexer.is_configured", classmethod(lambda cls: False))
 
     response = client.post(
@@ -33,6 +35,7 @@ def test_predict_file_valid_txt_upload(monkeypatch) -> None:
                 "text/plain",
             )
         },
+        headers=auth_headers("User"),
     )
     payload = response.json()
 
@@ -50,18 +53,22 @@ def test_predict_file_valid_txt_upload(monkeypatch) -> None:
 
 
 def test_predict_file_rejects_unsupported_upload() -> None:
+    install_auth_override()
     response = client.post(
         "/predict-file",
         files={"file": ("sample.csv", b"not,a,supported,document", "text/csv")},
+        headers=auth_headers("User"),
     )
 
     assert response.status_code == 400
 
 
 def test_predict_file_rejects_empty_upload() -> None:
+    install_auth_override()
     response = client.post(
         "/predict-file",
         files={"file": ("empty.txt", b"", "text/plain")},
+        headers=auth_headers("User"),
     )
 
     assert response.status_code == 400

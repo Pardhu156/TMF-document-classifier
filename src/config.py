@@ -228,6 +228,22 @@ class DatabaseConfig:
 
 
 @dataclass
+class AuthConfig:
+    """JWT and password-hashing configuration for API authentication."""
+
+    jwt_secret_key: str = "change-me-in-production"
+    jwt_algorithm: str = "HS256"
+    access_token_expire_minutes: int = 60
+
+    def __post_init__(self) -> None:
+        self.jwt_secret_key = os.getenv("JWT_SECRET_KEY", self.jwt_secret_key)
+        self.jwt_algorithm = os.getenv("JWT_ALGORITHM", self.jwt_algorithm)
+        self.access_token_expire_minutes = int(
+            os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", str(self.access_token_expire_minutes))
+        )
+
+
+@dataclass
 class RetrainingConfig:
     retrain_min_new_documents: int = 1
     retrain_only_verified_data: bool = True

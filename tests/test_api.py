@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 
 from app import app
 from src.config import PredictionConfig
+from tests.auth_helpers import auth_headers, install_auth_override
 
 
 client = TestClient(app)
@@ -46,10 +47,12 @@ def test_model_info_endpoint() -> None:
 def test_predict_endpoint_valid_text() -> None:
     if not _model_artifacts_available():
         pytest.skip("Saved model artifacts are not available.")
+    install_auth_override()
 
     response = client.post(
         "/predict",
         json={"text": "This document describes study objectives and inclusion criteria."},
+        headers=auth_headers("User"),
     )
     payload = response.json()
 
@@ -61,6 +64,7 @@ def test_predict_endpoint_valid_text() -> None:
 
 
 def test_predict_endpoint_empty_text() -> None:
-    response = client.post("/predict", json={"text": "   "})
+    install_auth_override()
+    response = client.post("/predict", json={"text": "   "}, headers=auth_headers("User"))
 
     assert response.status_code == 400
