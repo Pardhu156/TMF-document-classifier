@@ -8,6 +8,7 @@ from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 
+
 from src.auth import (
     ROLE_ADMIN,
     ROLE_MANAGER,
