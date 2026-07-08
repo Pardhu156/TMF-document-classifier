@@ -7,6 +7,7 @@ from typing import Any
 
 from src.config import DatabaseConfig, RAGConfig
 from src.logger import logger
+from src.rag.access_control import ACCESS_PERMISSION_MESSAGE, allowed_access_levels_for_role, apply_access_filters, normalize_access_level
 from src.rag.embeddings import GeminiEmbeddingClient
 from src.rag.generator import GeminiAnswerGenerator, NOT_FOUND_ANSWER
 from src.rag.metrics import log_rag_metrics_to_mlflow, rag_metrics
@@ -25,6 +26,20 @@ def _source_from_chunk(chunk: dict[str, Any]) -> dict[str, Any]:
         "chunk_index": chunk.get("chunk_index"),
         "score": chunk.get("hybrid_score") or chunk.get("semantic_score") or chunk.get("keyword_score"),
     }
+
+
+def _document_matches_filters(document: dict[str, Any], filters: dict[str, Any]) -> bool:
+    """Return True when a document satisfies exact/list metadata filters."""
+    for key, value in filters.items():
+        if value in (None, ""):
+            continue
+        document_value = document.get(key)
+        if isinstance(value, (list, tuple, set)):
+            if str(document_value) not in {str(item) for item in value}:
+                return False
+        elif str(document_value) != str(value):
+            return False
+    return True
 
 
 class RAGService:
@@ -58,11 +73,34 @@ class RAGService:
         source_type: str | None = None,
         verification_status: str | None = None,
         scope: str = "master",
+        current_user: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         start = perf_counter()
         if not question.strip():
             raise ValueError("question must be a non-empty string")
-        documents = self.list_documents()
+        current_user = current_user or {"id": None, "role": "Admin"}
+        user_id = current_user.get("id")
+        role = normalize_access_level(str(current_user.get("role") or "User"))
+        allowed_access_levels = allowed_access_levels_for_role(role)
+        all_documents = self.list_documents()
+        documents = [
+            document
+            for document in all_documents
+            if normalize_access_level(document.get("access_level")) in allowed_access_levels
+        ]
+        filtered_document_ids = [
+            str(document.get("document_id"))
+            for document in all_documents
+            if normalize_access_level(document.get("access_level")) not in allowed_access_levels
+        ]
+        logger.info(
+            "RAG RBAC context: user_id=%s role=%s allowed_access_levels=%s authorized_document_ids=%s filtered_document_ids=%s",
+            user_id,
+            role,
+            allowed_access_levels,
+            [str(document.get("document_id")) for document in documents],
+            filtered_document_ids,
+        )
         retrieval_plan = build_retrieval_plan(
             question=question,
             documents=documents,
@@ -73,6 +111,36 @@ class RAGService:
             verification_status=verification_status,
             scope=scope,
         )
+        access_filters = apply_access_filters(retrieval_plan.filters, role)
+        requested_documents = [
+            document for document in all_documents if _document_matches_filters(document, retrieval_plan.filters)
+        ]
+        authorized_requested_documents = [
+            document for document in requested_documents if _document_matches_filters(document, access_filters)
+        ]
+        if not documents or (requested_documents and not authorized_requested_documents):
+            latency_ms = int((perf_counter() - start) * 1000)
+            denied_ids = [str(document.get("document_id")) for document in requested_documents] or filtered_document_ids
+            logger.warning(
+                "RAG access denied: user_id=%s role=%s denied_document_ids=%s filters=%s",
+                user_id,
+                role,
+                denied_ids,
+                retrieval_plan.filters,
+            )
+            rag_metrics.record(latency_ms, "none")
+            return {
+                "answer": ACCESS_PERMISSION_MESSAGE,
+                "sources": [],
+                "cache_hit": False,
+                "cache_type": "none",
+                "retrieved_chunks": [],
+                "latency_ms": latency_ms,
+                "retrieval_scope": retrieval_plan.retrieval_scope,
+                "matched_file_name": retrieval_plan.matched_file_name,
+                "clarification_required": False,
+                "candidate_files": [],
+            }
         if retrieval_plan.clarification_required:
             latency_ms = int((perf_counter() - start) * 1000)
             rag_metrics.record(latency_ms, "none")
@@ -90,10 +158,10 @@ class RAGService:
             }
 
         cache_scope = document_scope(
-            retrieval_plan.filters.get("document_id"),
-            retrieval_plan.filters.get("predicted_class") or predicted_class,
+            access_filters.get("document_id"),
+            access_filters.get("predicted_class") or predicted_class,
         )
-        cache_scope = f"{cache_scope}|scope:{retrieval_plan.retrieval_scope}|file:{retrieval_plan.matched_file_name or retrieval_plan.filters.get('file_name') or ''}|source:{retrieval_plan.filters.get('source_type') or ''}|verification:{retrieval_plan.filters.get('verification_status') or ''}"
+        cache_scope = f"{cache_scope}|scope:{retrieval_plan.retrieval_scope}|file:{retrieval_plan.matched_file_name or access_filters.get('file_name') or ''}|source:{access_filters.get('source_type') or ''}|verification:{access_filters.get('verification_status') or ''}|access:{','.join(allowed_access_levels)}|role:{role}"
         query_embedding = self.embedding_client.embed_query(question)
 
         exact_cache = self.cache.get_exact(question, cache_scope)
@@ -136,7 +204,7 @@ class RAGService:
             document_id=document_id,
             predicted_class=predicted_class,
             query_embedding=query_embedding,
-            filters=retrieval_plan.filters,
+            filters=access_filters,
         )
         retrieval_latency_ms = int((perf_counter() - retrieval_start) * 1000)
         generation_start = perf_counter()
@@ -162,7 +230,7 @@ class RAGService:
         logger.info(
             "RAG answer generated: scope=%s, filters=%s, chunks=%d, latency_ms=%d",
             retrieval_plan.retrieval_scope,
-            retrieval_plan.filters,
+            access_filters,
             len(chunks),
             latency_ms,
         )
@@ -179,8 +247,15 @@ class RAGService:
             "candidate_files": [],
         }
 
-    def list_documents(self) -> list[dict[str, Any]]:
+    def list_documents(self, current_user: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         documents = self.vector_store.list_documents()
+        if current_user is not None:
+            allowed_levels = set(allowed_access_levels_for_role(str(current_user.get("role") or "User")))
+            documents = [
+                document
+                for document in documents
+                if normalize_access_level(document.get("access_level")) in allowed_levels
+            ]
         for document in documents:
             created_at = document.get("created_at")
             if hasattr(created_at, "isoformat"):
@@ -228,6 +303,8 @@ class RAGIndexer:
         source_type: str = "PREDICT_UPLOAD",
         verification_status: str = "unverified",
         file_hash: str | None = None,
+        access_level: str = "User",
+        owner_id: str | None = None,
     ) -> int:
         try:
             self.cache.set_document_status(document_id, "uploaded")
@@ -243,6 +320,8 @@ class RAGIndexer:
                 source_type=source_type,
                 verification_status=verification_status,
                 file_hash=file_hash,
+                access_level=normalize_access_level(access_level),
+                owner_id=owner_id,
             )
             chunks = [
                 {
@@ -252,6 +331,8 @@ class RAGIndexer:
                     "source_type": source_type,
                     "verification_status": verification_status,
                     "file_hash": file_hash,
+                    "access_level": normalize_access_level(access_level),
+                    "owner_id": owner_id,
                     "chunk_id": f"{document_id}:{index}",
                     "page_no": None,
                     "chunk_index": index,

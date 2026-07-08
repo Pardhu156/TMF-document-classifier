@@ -46,6 +46,8 @@ class PgVectorStore:
                         source_type TEXT DEFAULT 'PREDICT_UPLOAD',
                         verification_status TEXT DEFAULT 'unverified',
                         file_hash TEXT,
+                        access_level TEXT DEFAULT 'User',
+                        owner_id TEXT,
                         uploaded_by TEXT,
                         created_at TIMESTAMPTZ DEFAULT NOW()
                     );
@@ -63,6 +65,8 @@ class PgVectorStore:
                         source_type TEXT DEFAULT 'PREDICT_UPLOAD',
                         verification_status TEXT DEFAULT 'unverified',
                         file_hash TEXT,
+                        access_level TEXT DEFAULT 'User',
+                        owner_id TEXT,
                         chunk_id TEXT UNIQUE,
                         page_no INTEGER,
                         chunk_index INTEGER,
@@ -78,11 +82,17 @@ class PgVectorStore:
                 "ALTER TABLE rag_documents ADD COLUMN IF NOT EXISTS source_type TEXT DEFAULT 'PREDICT_UPLOAD'",
                 "ALTER TABLE rag_documents ADD COLUMN IF NOT EXISTS verification_status TEXT DEFAULT 'unverified'",
                 "ALTER TABLE rag_documents ADD COLUMN IF NOT EXISTS file_hash TEXT",
+                "ALTER TABLE rag_documents ADD COLUMN IF NOT EXISTS access_level TEXT DEFAULT 'User'",
+                "ALTER TABLE rag_documents ADD COLUMN IF NOT EXISTS owner_id TEXT",
                 "ALTER TABLE rag_chunks ADD COLUMN IF NOT EXISTS source_type TEXT DEFAULT 'PREDICT_UPLOAD'",
                 "ALTER TABLE rag_chunks ADD COLUMN IF NOT EXISTS verification_status TEXT DEFAULT 'unverified'",
                 "ALTER TABLE rag_chunks ADD COLUMN IF NOT EXISTS file_hash TEXT",
+                "ALTER TABLE rag_chunks ADD COLUMN IF NOT EXISTS access_level TEXT DEFAULT 'User'",
+                "ALTER TABLE rag_chunks ADD COLUMN IF NOT EXISTS owner_id TEXT",
             ):
                 connection.execute(text(statement))
+            connection.execute(text("UPDATE rag_documents SET access_level = 'User' WHERE access_level IS NULL"))
+            connection.execute(text("UPDATE rag_chunks SET access_level = 'User' WHERE access_level IS NULL"))
             connection.execute(
                 text(
                     """
@@ -97,6 +107,8 @@ class PgVectorStore:
             connection.execute(text("CREATE INDEX IF NOT EXISTS idx_rag_chunks_predicted_class ON rag_chunks (predicted_class)"))
             connection.execute(text("CREATE INDEX IF NOT EXISTS idx_rag_chunks_source_type ON rag_chunks (source_type)"))
             connection.execute(text("CREATE INDEX IF NOT EXISTS idx_rag_chunks_verification_status ON rag_chunks (verification_status)"))
+            connection.execute(text("CREATE INDEX IF NOT EXISTS idx_rag_documents_access_level ON rag_documents (access_level)"))
+            connection.execute(text("CREATE INDEX IF NOT EXISTS idx_rag_chunks_access_level ON rag_chunks (access_level)"))
             if dimension <= 2000:
                 connection.execute(
                     text(
@@ -122,6 +134,8 @@ class PgVectorStore:
         source_type: str = "PREDICT_UPLOAD",
         verification_status: str = "unverified",
         file_hash: str | None = None,
+        access_level: str = "User",
+        owner_id: str | None = None,
     ) -> None:
         self.ensure_schema()
         with self.engine.begin() as connection:
@@ -130,11 +144,11 @@ class PgVectorStore:
                     """
                     INSERT INTO rag_documents (
                         document_id, file_name, predicted_class, source_type,
-                        verification_status, file_hash, uploaded_by
+                        verification_status, file_hash, access_level, owner_id, uploaded_by
                     )
                     VALUES (
                         :document_id, :file_name, :predicted_class, :source_type,
-                        :verification_status, :file_hash, :uploaded_by
+                        :verification_status, :file_hash, :access_level, :owner_id, :uploaded_by
                     )
                     ON CONFLICT (document_id) DO UPDATE SET
                         file_name = EXCLUDED.file_name,
@@ -142,6 +156,8 @@ class PgVectorStore:
                         source_type = EXCLUDED.source_type,
                         verification_status = EXCLUDED.verification_status,
                         file_hash = EXCLUDED.file_hash,
+                        access_level = EXCLUDED.access_level,
+                        owner_id = EXCLUDED.owner_id,
                         uploaded_by = EXCLUDED.uploaded_by
                     """
                 ),
@@ -152,6 +168,8 @@ class PgVectorStore:
                     "source_type": source_type,
                     "verification_status": verification_status,
                     "file_hash": file_hash,
+                    "access_level": access_level,
+                    "owner_id": owner_id,
                     "uploaded_by": uploaded_by,
                 },
             )
@@ -167,12 +185,12 @@ class PgVectorStore:
                         """
                         INSERT INTO rag_chunks (
                             document_id, file_name, predicted_class, source_type,
-                            verification_status, file_hash, chunk_id, page_no,
+                            verification_status, file_hash, access_level, owner_id, chunk_id, page_no,
                             chunk_index, chunk_text, embedding, uploaded_by
                         )
                         VALUES (
                             :document_id, :file_name, :predicted_class, :source_type,
-                            :verification_status, :file_hash, :chunk_id, :page_no,
+                            :verification_status, :file_hash, :access_level, :owner_id, :chunk_id, :page_no,
                             :chunk_index, :chunk_text, CAST(:embedding AS vector), :uploaded_by
                         )
                         ON CONFLICT (chunk_id) DO UPDATE SET
@@ -181,13 +199,17 @@ class PgVectorStore:
                             predicted_class = EXCLUDED.predicted_class,
                             source_type = EXCLUDED.source_type,
                             verification_status = EXCLUDED.verification_status,
-                            file_hash = EXCLUDED.file_hash
+                            file_hash = EXCLUDED.file_hash,
+                            access_level = EXCLUDED.access_level,
+                            owner_id = EXCLUDED.owner_id
                         """
                     ),
                     {
                         "source_type": "PREDICT_UPLOAD",
                         "verification_status": "unverified",
                         "file_hash": None,
+                        "access_level": "User",
+                        "owner_id": None,
                         **chunk,
                         "embedding": _vector_literal(chunk["embedding"]),
                     },
@@ -202,10 +224,21 @@ class PgVectorStore:
     ) -> str:
         clauses = list(extra_filters or [])
         for key, value in _clean_filters(filters).items():
-            if key not in {"document_id", "predicted_class", "file_name", "source_type", "verification_status"}:
+            if key not in {"document_id", "predicted_class", "file_name", "source_type", "verification_status", "access_level", "owner_id", "uploaded_by"}:
                 continue
-            clauses.append(f"{key} = :{key}")
-            params[key] = str(value)
+            if isinstance(value, (list, tuple, set)):
+                values = [str(item) for item in value if item not in (None, "")]
+                if not values:
+                    continue
+                param_names = []
+                for index, item in enumerate(values):
+                    param_name = f"{key}_{index}"
+                    param_names.append(f":{param_name}")
+                    params[param_name] = item
+                clauses.append(f"{key} IN ({', '.join(param_names)})")
+            else:
+                clauses.append(f"{key} = :{key}")
+                params[key] = str(value)
         return "WHERE " + " AND ".join(clauses) if clauses else ""
 
     def semantic_search(
@@ -227,6 +260,7 @@ class PgVectorStore:
         query = text(
             f"""
             SELECT document_id, file_name, predicted_class, source_type, verification_status,
+                   access_level, owner_id,
                    chunk_id, page_no, chunk_index,
                    chunk_text, 1 - (embedding <=> CAST(:embedding AS vector)) AS semantic_score
             FROM rag_chunks
@@ -258,6 +292,7 @@ class PgVectorStore:
         query = text(
             f"""
             SELECT document_id, file_name, predicted_class, source_type, verification_status,
+                   access_level, owner_id,
                    chunk_id, page_no, chunk_index,
                    chunk_text,
                    ts_rank(to_tsvector('english', chunk_text), plainto_tsquery('english', :question)) AS keyword_score
@@ -281,7 +316,7 @@ class PgVectorStore:
                     text(
                         f"""
                         SELECT document_id, file_name, predicted_class, source_type,
-                               verification_status, uploaded_by, created_at
+                               verification_status, access_level, owner_id, uploaded_by, created_at
                         FROM rag_documents
                         {where_clause}
                         ORDER BY created_at DESC
@@ -302,7 +337,7 @@ class PgVectorStore:
                 text(
                     f"""
                     SELECT document_id, file_name, predicted_class, source_type,
-                           verification_status, file_hash, uploaded_by, created_at
+                           verification_status, file_hash, access_level, owner_id, uploaded_by, created_at
                     FROM rag_documents
                     {where_clause}
                     LIMIT 1
@@ -317,6 +352,8 @@ class PgVectorStore:
         document_id: str,
         predicted_class: str | None = None,
         verification_status: str | None = None,
+        access_level: str | None = None,
+        owner_id: str | None = None,
     ) -> None:
         self.ensure_schema()
         updates = []
@@ -327,6 +364,12 @@ class PgVectorStore:
         if verification_status:
             updates.append("verification_status = :verification_status")
             params["verification_status"] = verification_status
+        if access_level:
+            updates.append("access_level = :access_level")
+            params["access_level"] = access_level
+        if owner_id:
+            updates.append("owner_id = :owner_id")
+            params["owner_id"] = owner_id
         if not updates:
             return
         update_clause = ", ".join(updates)

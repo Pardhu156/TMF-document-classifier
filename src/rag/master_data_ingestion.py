@@ -13,6 +13,7 @@ from src.data_preprocessing import chunk_document_text, clean_document_text
 from src.exception import CustomException
 from src.file_utils import extract_text_from_docx, extract_text_from_pdf, extract_text_from_txt
 from src.logger import logger
+from src.rag.access_control import demo_access_level_for_index
 from src.rag.retrieval_policy import MASTER_SOURCE_TYPE
 from src.rag.service import RAGIndexer
 from src.rag.vector_store import PgVectorStore
@@ -79,7 +80,7 @@ class MasterDataIngestionPipeline:
                 vector_store=vector_store,
             )
 
-            for file_path in tqdm(files, desc="Indexing MASTER_DATA", unit="file"):
+            for file_index, file_path in enumerate(tqdm(files, desc="Indexing MASTER_DATA", unit="file")):
                 file_hash = calculate_file_hash(file_path)
                 existing = vector_store.get_document_by_file_hash(file_hash, source_type=MASTER_SOURCE_TYPE)
                 if existing:
@@ -105,6 +106,7 @@ class MasterDataIngestionPipeline:
 
                 relative_name = file_path.relative_to(root).as_posix()
                 document_id = f"master_{file_hash[:12]}"
+                access_level = demo_access_level_for_index(file_index)
                 indexed_count = indexer.index_document(
                     document_id=document_id,
                     file_name=relative_name,
@@ -114,6 +116,8 @@ class MasterDataIngestionPipeline:
                     source_type=MASTER_SOURCE_TYPE,
                     verification_status="verified",
                     file_hash=file_hash,
+                    access_level=access_level,
+                    owner_id="master_data_ingestion",
                 )
                 indexed_documents += 1
                 indexed_chunks += indexed_count

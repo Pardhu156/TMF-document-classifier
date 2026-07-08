@@ -298,6 +298,8 @@ class CloudIngestionPipeline:
                 source_type="PREDICT_UPLOAD",
                 verification_status="unverified",
                 file_hash=file_hash,
+                access_level="User",
+                owner_id=uploaded_by,
             )
         except Exception as error:
             logger.warning("RAG indexing failed for doc_id=%s without blocking classification upload: %s", doc_id, error)

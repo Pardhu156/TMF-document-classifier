@@ -25,6 +25,7 @@ from src.exception import CustomException
 from src.file_utils import extract_text_from_docx, extract_text_from_pdf, extract_text_from_txt
 from src.logger import logger
 from src.predict import predict_text
+from src.rag.access_control import normalize_access_level
 from src.utils import document_confidence_summary
 from src.utils.hashing import calculate_file_hash, calculate_text_hash
 
@@ -98,8 +99,9 @@ class AgenticTMFFilingPipeline:
     def persistence_enabled(self) -> bool:
         return self.repository is not None and self.s3_manager is not None
 
-    async def run(self, upload_file, uploaded_by: str | None = None) -> dict[str, Any]:
+    async def run(self, upload_file, uploaded_by: str | None = None, access_level: str = "User", owner_id: str | None = None) -> dict[str, Any]:
         """Upload, classify, then auto-file or queue for manual review."""
+        access_level = normalize_access_level(access_level)
         safe_filename = Path(upload_file.filename or "uploaded_document").name
         suffix = Path(safe_filename).suffix.lower()
         if suffix not in SUPPORTED_AGENTIC_EXTENSIONS:
@@ -163,6 +165,8 @@ class AgenticTMFFilingPipeline:
                         temp_path=temp_path,
                         safe_filename=safe_filename,
                         uploaded_by=uploaded_by,
+                        access_level=access_level,
+                        owner_id=owner_id,
                         file_hash=file_hash,
                         cleaned_text=cleaned_text,
                         chunk_texts=chunk_texts,
@@ -178,6 +182,8 @@ class AgenticTMFFilingPipeline:
                     temp_path=temp_path,
                     safe_filename=safe_filename,
                     uploaded_by=uploaded_by,
+                    access_level=access_level,
+                    owner_id=owner_id,
                     file_hash=file_hash,
                     cleaned_text=cleaned_text,
                     prediction=prediction,
@@ -435,6 +441,8 @@ class AgenticTMFFilingPipeline:
         approval_status: str,
         rag_ingested: bool,
         top_k_predictions: list[dict[str, Any]],
+        access_level: str = "User",
+        owner_id: str | None = None,
     ) -> dict[str, Any]:
         return {
             "document_id": str(doc_id or file_hash),
@@ -452,6 +460,8 @@ class AgenticTMFFilingPipeline:
             "status": status,
             "approval_status": approval_status,
             "rag_ingested": rag_ingested,
+            "access_level": normalize_access_level(access_level),
+            "owner_id": owner_id,
             "top_k_predictions": top_k_predictions,
         }
 
@@ -474,6 +484,8 @@ class AgenticTMFFilingPipeline:
                 "version": payload["version"],
                 "status": payload["status"],
                 "approval_status": payload["approval_status"],
+                "access_level": payload["access_level"],
+                "owner_id": payload["owner_id"],
                 "rag_ingested": payload["rag_ingested"],
                 "details": payload,
             }
@@ -496,7 +508,17 @@ class AgenticTMFFilingPipeline:
         logger.info("Uploading structured metadata for doc_id=%s to %s", doc_id, key)
         return self.s3_manager.upload_text(payload_json, key, content_type="application/json")
 
-    def _index_rag(self, doc_id: int, filename: str, final_class: str, chunk_texts: list[str], uploaded_by: str | None, file_hash: str) -> tuple[bool, str]:
+    def _index_rag(
+        self,
+        doc_id: int,
+        filename: str,
+        final_class: str,
+        chunk_texts: list[str],
+        uploaded_by: str | None,
+        file_hash: str,
+        access_level: str = "User",
+        owner_id: str | None = None,
+    ) -> tuple[bool, str]:
         try:
             if self.rag_indexer is not None:
                 self.rag_indexer.index_document(
@@ -508,6 +530,8 @@ class AgenticTMFFilingPipeline:
                     source_type="PREDICT_UPLOAD",
                     verification_status="verified",
                     file_hash=file_hash,
+                    access_level=access_level,
+                    owner_id=owner_id,
                 )
                 return True, "rag_ingested"
             from src.rag.service import RAGIndexer
@@ -524,6 +548,8 @@ class AgenticTMFFilingPipeline:
                 source_type="PREDICT_UPLOAD",
                 verification_status="verified",
                 file_hash=file_hash,
+                access_level=access_level,
+                owner_id=owner_id,
             )
             return True, "rag_ingested"
         except Exception as error:
@@ -643,6 +669,8 @@ class AgenticTMFFilingPipeline:
                 kwargs["chunk_texts"],
                 kwargs["uploaded_by"],
                 file_hash,
+                kwargs["access_level"],
+                kwargs["owner_id"],
             )
             self.repository.update_document_status(
                 doc_id,
@@ -663,6 +691,8 @@ class AgenticTMFFilingPipeline:
             approval_status="pending_training_approval",
             rag_ingested=rag_ingested,
             top_k_predictions=kwargs["top_k_predictions"],
+            access_level=kwargs["access_level"],
+            owner_id=kwargs["owner_id"],
         )
         metadata_payload["pending_training_path"] = training_uri
         metadata_path = self._upload_metadata(metadata_payload, file_hash, doc_id)
@@ -731,6 +761,8 @@ class AgenticTMFFilingPipeline:
             approval_status="pending_review",
             rag_ingested=False,
             top_k_predictions=kwargs["top_k_predictions"],
+            access_level=kwargs["access_level"],
+            owner_id=kwargs["owner_id"],
         )
         metadata_path = self._upload_metadata(metadata_payload, file_hash, doc_id)
         metadata_payload["metadata_path"] = metadata_path
@@ -820,6 +852,8 @@ class AgenticTMFFilingPipeline:
             chunk_texts,
             document.get("uploaded_by"),
             document["file_hash"],
+            metadata.get("access_level") or (metadata.get("details") or {}).get("access_level") or "User",
+            metadata.get("owner_id") or (metadata.get("details") or {}).get("owner_id"),
         )
         self.repository.update_document_status(doc_id, "pending_training_approval" if rag_ingested else "human_corrected")
         details = {

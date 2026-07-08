@@ -21,6 +21,7 @@ class FakeRAGService:
         source_type=None,
         verification_status=None,
         scope="master",
+        current_user=None,
     ):
         if not question.strip():
             raise ValueError("question must be a non-empty string")
@@ -46,7 +47,7 @@ class FakeRAGService:
             "candidate_files": [],
         }
 
-    def list_documents(self):
+    def list_documents(self, current_user=None):
         return [
             {
                 "document_id": "1",
@@ -54,6 +55,8 @@ class FakeRAGService:
                 "predicted_class": "protocol",
                 "source_type": "MASTER_DATA",
                 "verification_status": "verified",
+                "access_level": "User",
+                "owner_id": "master_data_ingestion",
                 "uploaded_by": "admin",
                 "created_at": "2026-06-30T10:00:00Z",
             }

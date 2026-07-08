@@ -134,6 +134,8 @@ class DocumentMetadata(Base):
     version: Mapped[str | None] = mapped_column(String(64), nullable=True)
     status: Mapped[str] = mapped_column(String(64), nullable=False)
     approval_status: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    access_level: Mapped[str] = mapped_column(String(32), default="User", nullable=False)
+    owner_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     rag_ingested: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     details: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)

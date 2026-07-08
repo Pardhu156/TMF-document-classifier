@@ -45,6 +45,8 @@ class RAGDocumentResponse(BaseModel):
     predicted_class: str | None = None
     source_type: str | None = None
     verification_status: str | None = None
+    access_level: str | None = None
+    owner_id: str | None = None
     uploaded_by: str | None = None
     created_at: str | None = None
 

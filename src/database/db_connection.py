@@ -5,7 +5,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from typing import Iterator
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from src.config import DatabaseConfig
@@ -23,6 +23,24 @@ def create_db_engine(config: DatabaseConfig | None = None):
 def create_tables(engine) -> None:
     """Create all Stage 4 tables if they do not already exist."""
     Base.metadata.create_all(bind=engine)
+    _ensure_document_metadata_rbac_columns(engine)
+
+
+def _ensure_document_metadata_rbac_columns(engine) -> None:
+    """Add Stage 7.1+ RBAC metadata columns to existing databases."""
+    inspector = inspect(engine)
+    if "document_metadata" not in inspector.get_table_names():
+        return
+    existing_columns = {column["name"] for column in inspector.get_columns("document_metadata")}
+    statements = []
+    if "access_level" not in existing_columns:
+        statements.append("ALTER TABLE document_metadata ADD COLUMN access_level VARCHAR(32) DEFAULT 'User' NOT NULL")
+    if "owner_id" not in existing_columns:
+        statements.append("ALTER TABLE document_metadata ADD COLUMN owner_id VARCHAR(255)")
+    with engine.begin() as connection:
+        for statement in statements:
+            connection.execute(text(statement))
+        connection.execute(text("UPDATE document_metadata SET access_level = 'User' WHERE access_level IS NULL"))
 
 
 def create_session_factory(config: DatabaseConfig | None = None) -> sessionmaker:

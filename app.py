@@ -241,7 +241,12 @@ async def predict_file(current_user: AnyAuthenticatedUser, file: UploadFile = Fi
         )
 
     try:
-        return await AgenticTMFFilingPipeline().run(file, uploaded_by=current_user["email"])
+        return await AgenticTMFFilingPipeline().run(
+            file,
+            uploaded_by=current_user["email"],
+            access_level=current_user["role"],
+            owner_id=str(current_user["id"]),
+        )
     except HTTPException:
         raise
     except ValueError as error:
@@ -442,6 +447,7 @@ def rag_ask(request: RAGAskRequest, current_user: AnyAuthenticatedUser) -> dict[
             source_type=request.source_type,
             verification_status=request.verification_status,
             scope=request.scope,
+            current_user=current_user,
         )
     except HTTPException:
         raise
@@ -458,7 +464,7 @@ def rag_documents(current_user: AnyAuthenticatedUser) -> list[dict[str, Any]]:
     try:
         if not RAGService.is_configured():
             raise HTTPException(status_code=503, detail="RAG is not configured. Set PostgreSQL and GEMINI_API_KEY.")
-        return RAGService().list_documents()
+        return RAGService().list_documents(current_user=current_user)
     except HTTPException:
         raise
     except Exception as error:

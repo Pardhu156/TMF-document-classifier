@@ -131,8 +131,10 @@ def predictor(label: str, confidence: float):
 
 
 def make_pipeline(repository, s3, rag, confidence: float, threshold: float = 0.9) -> AgenticTMFFilingPipeline:
+    agentic_config = AgenticFilingConfig(auto_approval_threshold=threshold, min_confidence_gap=0.1)
+    agentic_config.auto_approval_threshold = threshold
     return AgenticTMFFilingPipeline(
-        agentic_config=AgenticFilingConfig(auto_approval_threshold=threshold, min_confidence_gap=0.1),
+        agentic_config=agentic_config,
         cloud_config=CloudConfig(aws_s3_bucket_name="fake-bucket"),
         repository=repository,
         s3_manager=s3,
@@ -152,6 +154,7 @@ def test_high_confidence_document_is_auto_filed_and_rag_ingested() -> None:
     assert result["final_class"] == "protocol"
     assert result["document_status"] == "pending_training_approval"
     assert len(rag.calls) == 1
+    assert rag.calls[0]["access_level"] == "User"
     assert any("agentic_tmf_workspace/tmf/protocol/" in key for key in s3.objects)
 
 

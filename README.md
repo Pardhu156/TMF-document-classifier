@@ -1059,3 +1059,21 @@ python scripts/seed_demo_users.py
 ```
 
 `scripts/seed_demo_users.py` is idempotent and is run automatically by `docker compose up --build` through the `db-seeder` service.
+
+### RAG document access filtering
+
+RAG retrieval uses document metadata for RBAC. Files stay in the same S3/local storage locations; access is controlled by `access_level` metadata stored on `rag_documents`, `rag_chunks`, and `document_metadata`.
+
+Access rules:
+
+- User retrieves `User` documents.
+- Manager retrieves `User` and `Manager` documents.
+- Admin retrieves `User`, `Manager`, and `Admin` documents.
+
+If a user asks for a document outside their role scope, the API returns:
+
+```text
+You do not have permission to access documents relevant to this query.
+```
+
+The classifier still predicts only TMF classes such as `protocol`, `safety_report`, and `statistical_analysis_plan`; RBAC is an additional retrieval metadata filter.

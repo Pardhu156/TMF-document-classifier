@@ -129,6 +129,8 @@ class TrainingDataIngestionPipeline:
                     source_type=TRAINING_SOURCE_TYPE,
                     verification_status="verified",
                     file_hash=file_hash,
+                    access_level="User",
+                    owner_id="training_data_ingestion",
                 )
                 indexed_documents += 1
                 indexed_chunks += indexed_count

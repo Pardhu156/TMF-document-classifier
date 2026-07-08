@@ -45,4 +45,6 @@ def test_training_data_ingestion_indexes_class_folder_metadata(tmp_path: Path, m
     assert fake_indexer.indexed[0]["predicted_class"] == "protocol"
     assert fake_indexer.indexed[0]["source_type"] == "TRAINING_DATA"
     assert fake_indexer.indexed[0]["verification_status"] == "verified"
+    assert fake_indexer.indexed[0]["access_level"] == "User"
+    assert fake_indexer.indexed[0]["owner_id"] == "training_data_ingestion"
     assert fake_indexer.indexed[0]["file_name"] == "protocol/prot.txt"
