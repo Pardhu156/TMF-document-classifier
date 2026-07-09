@@ -82,3 +82,106 @@ jobs:
             ${{ env.DOCKERHUB_USER }}/tmf-classifier:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  deploy-backend-elastic-beanstalk:
+    name: Deploy backend to Elastic Beanstalk
+    runs-on: ubuntu-latest
+    needs: docker-build-push
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    env:
+      DOCKERHUB_USER: ${{ secrets.DOCKERHUB_USERNAME || secrets.DOCKER_USERNAME }}
+      AWS_REGION: ${{ secrets.AWS_REGION }}
+      EB_APPLICATION_NAME: ${{ secrets.EB_APPLICATION_NAME }}
+      EB_ENVIRONMENT_NAME: ${{ secrets.EB_ENVIRONMENT_NAME }}
+      EB_DEPLOY_BUCKET: ${{ secrets.EB_DEPLOY_BUCKET }}
+      VERSION_LABEL: tmf-classifier-${{ github.sha }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Verify Elastic Beanstalk deployment secrets
+        run: |
+          if [ -z "$AWS_REGION" ] || [ -z "$EB_APPLICATION_NAME" ] || [ -z "$EB_ENVIRONMENT_NAME" ] || [ -z "$EB_DEPLOY_BUCKET" ]; then
+            echo "Elastic Beanstalk deployment secrets are missing."
+            echo "Required: AWS_REGION, EB_APPLICATION_NAME, EB_ENVIRONMENT_NAME, EB_DEPLOY_BUCKET."
+            exit 1
+          fi
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Create Elastic Beanstalk source bundle
+        run: |
+          mkdir -p deploy/build
+          sed "s|DOCKERHUB_USERNAME|${DOCKERHUB_USER}|g" deploy/elasticbeanstalk/Dockerrun.aws.json.template > deploy/build/Dockerrun.aws.json
+          cp -R .ebextensions deploy/build/.ebextensions
+          cd deploy/build
+          zip -r ../tmf-classifier-eb-${GITHUB_SHA}.zip Dockerrun.aws.json .ebextensions
+
+      - name: Upload Elastic Beanstalk source bundle
+        run: |
+          aws s3 cp "deploy/tmf-classifier-eb-${GITHUB_SHA}.zip" "s3://${EB_DEPLOY_BUCKET}/elasticbeanstalk/tmf-classifier-eb-${GITHUB_SHA}.zip"
+
+      - name: Create Elastic Beanstalk application version
+        run: |
+          aws elasticbeanstalk create-application-version \
+            --application-name "$EB_APPLICATION_NAME" \
+            --version-label "$VERSION_LABEL" \
+            --source-bundle S3Bucket="$EB_DEPLOY_BUCKET",S3Key="elasticbeanstalk/tmf-classifier-eb-${GITHUB_SHA}.zip"
+
+      - name: Deploy Elastic Beanstalk application version
+        run: |
+          aws elasticbeanstalk update-environment \
+            --application-name "$EB_APPLICATION_NAME" \
+            --environment-name "$EB_ENVIRONMENT_NAME" \
+            --version-label "$VERSION_LABEL"
+
+  deploy-frontend-s3-cloudfront:
+    name: Deploy frontend to S3 and invalidate CloudFront
+    runs-on: ubuntu-latest
+    needs: deploy-backend-elastic-beanstalk
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    env:
+      AWS_REGION: ${{ secrets.AWS_REGION }}
+      FRONTEND_S3_BUCKET: ${{ secrets.FRONTEND_S3_BUCKET }}
+      CLOUDFRONT_DISTRIBUTION_ID: ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Verify frontend deployment secrets
+        run: |
+          if [ -z "$AWS_REGION" ] || [ -z "$FRONTEND_S3_BUCKET" ] || [ -z "$CLOUDFRONT_DISTRIBUTION_ID" ]; then
+            echo "Frontend deployment secrets are missing."
+            echo "Required: AWS_REGION, FRONTEND_S3_BUCKET, CLOUDFRONT_DISTRIBUTION_ID."
+            exit 1
+          fi
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Upload static frontend
+        run: |
+          aws s3 sync frontend/ "s3://${FRONTEND_S3_BUCKET}/" \
+            --delete \
+            --exclude ".DS_Store" \
+            --cache-control "public,max-age=300"
+          aws s3 cp frontend/index.html "s3://${FRONTEND_S3_BUCKET}/index.html" \
+            --cache-control "no-cache,no-store,must-revalidate" \
+            --content-type "text/html"
+
+      - name: Invalidate CloudFront
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id "$CLOUDFRONT_DISTRIBUTION_ID" \
+            --paths "/*"

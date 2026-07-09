@@ -1026,6 +1026,7 @@ Admin:
 - `POST /users`
 - `PATCH /users/{user_id}`
 - `POST /documents/{doc_id}/verify`
+- `GET /agentic/training/pending`
 - `POST /agentic/training/{doc_id}/approve`
 - `POST /agentic/training/{doc_id}/reject`
 - `GET /agentic/metrics`
@@ -1077,3 +1078,7 @@ You do not have permission to access documents relevant to this query.
 ```
 
 The classifier still predicts only TMF classes such as `protocol`, `safety_report`, and `statistical_analysis_plan`; RBAC is an additional retrieval metadata filter.
+
+## Stage 8 AWS deployment
+
+The production-like POC deployment plan is documented in [docs/aws-deployment.md](docs/aws-deployment.md). It keeps the target architecture low-cost: S3 + CloudFront for the frontend, Elastic Beanstalk single-instance Docker for FastAPI, RDS PostgreSQL, ElastiCache Redis, S3 document storage, Docker Hub, GitHub Actions, and CloudWatch.
