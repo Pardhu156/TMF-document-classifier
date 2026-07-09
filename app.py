@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
+from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 
 
 from src.auth import (
@@ -64,7 +66,12 @@ app = FastAPI(
     version="1.0.0",
 )
 
+FRONTEND_DIR = Path(__file__).resolve().parent / "frontend"
+if FRONTEND_DIR.exists():
+    app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
+
 SUPPORTED_UPLOAD_EXTENSIONS = {".pdf", ".docx", ".txt"}
+MAX_UPLOAD_SIZE_BYTES = 20 * 1024 * 1024
 AnyAuthenticatedUser = Annotated[dict, Depends(require_roles([ROLE_USER, ROLE_MANAGER, ROLE_ADMIN]))]
 ManagerUser = Annotated[dict, Depends(require_min_role(ROLE_MANAGER))]
 AdminUser = Annotated[dict, Depends(require_roles([ROLE_ADMIN]))]
@@ -125,6 +132,16 @@ def health_check() -> dict[str, str]:
 def model_info() -> dict[str, Any]:
     """Return model and dataset metadata when available."""
     return _get_model_info()
+
+
+@app.get("/console", response_class=HTMLResponse)
+@app.get("/console/{path:path}", response_class=HTMLResponse)
+def frontend_console(path: str = "") -> str:
+    """Serve the role-based frontend console without changing API routes."""
+    index_path = FRONTEND_DIR / "index.html"
+    if not index_path.exists():
+        raise HTTPException(status_code=404, detail="Frontend assets are not available.")
+    return index_path.read_text(encoding="utf-8")
 
 
 @app.post("/auth/login", response_model=AuthResponse)
@@ -240,6 +257,8 @@ async def predict_file(current_user: AnyAuthenticatedUser, file: UploadFile = Fi
             status_code=400,
             detail="Unsupported file type. Supported formats are .pdf, .docx, and .txt.",
         )
+    if file.size is not None and file.size > MAX_UPLOAD_SIZE_BYTES:
+        raise HTTPException(status_code=413, detail="Uploaded file exceeds the 20 MB limit.")
 
     try:
         return await AgenticTMFFilingPipeline().run(
@@ -295,6 +314,15 @@ def submit_manual_review(doc_id: int, request: ManualReviewCorrectionRequest, cu
     except Exception as error:
         logger.exception("Manual review submit endpoint failed")
         raise HTTPException(status_code=500, detail=str(CustomException(error, sys.exc_info()))) from error
+
+
+@app.get("/agentic/training/pending")
+def list_training_approval_candidates(
+    current_user: AdminUser,
+    repository: Annotated[TMFRepository, Depends(get_auth_repository)],
+) -> dict[str, Any]:
+    """List finalized documents waiting for admin approval before retraining."""
+    return {"items": repository.list_documents_by_status(["pending_training_approval"])}
 
 
 @app.post("/agentic/training/{doc_id}/approve")

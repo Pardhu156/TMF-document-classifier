@@ -57,6 +57,16 @@ class AuthRepository:
     def list_documents_by_uploader(self, uploaded_by: str) -> list[dict]:
         return [{"doc_id": 10, "filename": "mine.txt", "uploaded_by": uploaded_by, "document_status": "auto_filed"}]
 
+    def list_documents_by_status(self, statuses: list[str]) -> list[dict]:
+        return [
+            {
+                "doc_id": 11,
+                "filename": "ready-for-training.txt",
+                "uploaded_by": "manager@test.com",
+                "document_status": statuses[0],
+            }
+        ]
+
 
 def install_repo() -> AuthRepository:
     repo = AuthRepository()
@@ -122,3 +132,16 @@ def test_admin_has_full_rbac_access_to_admin_api() -> None:
 
     assert users_response.status_code == 200
     assert audit_response.status_code == 200
+
+
+def test_training_approval_queue_is_admin_only() -> None:
+    install_repo()
+
+    user_response = client.get("/agentic/training/pending", headers=auth_headers("User"))
+    manager_response = client.get("/agentic/training/pending", headers=auth_headers("Manager"))
+    admin_response = client.get("/agentic/training/pending", headers=auth_headers("Admin"))
+
+    assert user_response.status_code == 403
+    assert manager_response.status_code == 403
+    assert admin_response.status_code == 200
+    assert admin_response.json()["items"][0]["document_status"] == "pending_training_approval"

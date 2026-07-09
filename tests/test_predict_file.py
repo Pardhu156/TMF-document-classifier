@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from app import app
+from app import MAX_UPLOAD_SIZE_BYTES, app
 from src.config import PredictionConfig
 from tests.auth_helpers import auth_headers, install_auth_override
 
@@ -72,3 +72,14 @@ def test_predict_file_rejects_empty_upload() -> None:
     )
 
     assert response.status_code == 400
+
+
+def test_predict_file_rejects_oversized_upload() -> None:
+    install_auth_override()
+    response = client.post(
+        "/predict-file",
+        files={"file": ("large.txt", b"x" * (MAX_UPLOAD_SIZE_BYTES + 1), "text/plain")},
+        headers=auth_headers("User"),
+    )
+
+    assert response.status_code == 413
