@@ -142,7 +142,7 @@ jobs:
             --version-label "$VERSION_LABEL"
 
   deploy-frontend-s3-cloudfront:
-    name: Deploy frontend to S3 and invalidate CloudFront
+    name: Deploy frontend to S3
     runs-on: ubuntu-latest
     needs: deploy-backend-elastic-beanstalk
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -150,6 +150,7 @@ jobs:
       AWS_REGION: ${{ secrets.AWS_REGION }}
       FRONTEND_S3_BUCKET: ${{ secrets.FRONTEND_S3_BUCKET }}
       CLOUDFRONT_DISTRIBUTION_ID: ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }}
+      FRONTEND_API_BASE_URL: ${{ secrets.FRONTEND_API_BASE_URL }}
 
     steps:
       - name: Checkout repository
@@ -157,9 +158,10 @@ jobs:
 
       - name: Verify frontend deployment secrets
         run: |
-          if [ -z "$AWS_REGION" ] || [ -z "$FRONTEND_S3_BUCKET" ] || [ -z "$CLOUDFRONT_DISTRIBUTION_ID" ]; then
+          if [ -z "$AWS_REGION" ] || [ -z "$FRONTEND_S3_BUCKET" ]; then
             echo "Frontend deployment secrets are missing."
-            echo "Required: AWS_REGION, FRONTEND_S3_BUCKET, CLOUDFRONT_DISTRIBUTION_ID."
+            echo "Required: AWS_REGION, FRONTEND_S3_BUCKET."
+            echo "Optional: CLOUDFRONT_DISTRIBUTION_ID when using CloudFront."
             exit 1
           fi
 
@@ -172,16 +174,32 @@ jobs:
 
       - name: Upload static frontend
         run: |
+          if [ -n "$FRONTEND_API_BASE_URL" ]; then
+            printf 'window.TMF_API_BASE_URL = "%s";\n' "$FRONTEND_API_BASE_URL" > frontend/config.js
+          fi
           aws s3 sync frontend/ "s3://${FRONTEND_S3_BUCKET}/" \
             --delete \
             --exclude ".DS_Store" \
             --cache-control "public,max-age=300"
+          aws s3 cp frontend/app.js "s3://${FRONTEND_S3_BUCKET}/static/app.js" \
+            --cache-control "public,max-age=300" \
+            --content-type "application/javascript"
+          aws s3 cp frontend/styles.css "s3://${FRONTEND_S3_BUCKET}/static/styles.css" \
+            --cache-control "public,max-age=300" \
+            --content-type "text/css"
+          aws s3 cp frontend/config.js "s3://${FRONTEND_S3_BUCKET}/static/config.js" \
+            --cache-control "no-cache,no-store,must-revalidate" \
+            --content-type "application/javascript"
           aws s3 cp frontend/index.html "s3://${FRONTEND_S3_BUCKET}/index.html" \
             --cache-control "no-cache,no-store,must-revalidate" \
             --content-type "text/html"
 
       - name: Invalidate CloudFront
         run: |
-          aws cloudfront create-invalidation \
-            --distribution-id "$CLOUDFRONT_DISTRIBUTION_ID" \
-            --paths "/*"
+          if [ -n "$CLOUDFRONT_DISTRIBUTION_ID" ]; then
+            aws cloudfront create-invalidation \
+              --distribution-id "$CLOUDFRONT_DISTRIBUTION_ID" \
+              --paths "/*"
+          else
+            echo "CLOUDFRONT_DISTRIBUTION_ID not set; skipping CloudFront invalidation."
+          fi

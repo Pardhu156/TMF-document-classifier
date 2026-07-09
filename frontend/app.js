@@ -11,6 +11,7 @@ const state = {
 };
 
 const tmfClasses = ["protocol", "safety_report", "statistical_analysis_plan"];
+const apiBaseUrl = (window.TMF_API_BASE_URL || "").replace(/\/$/, "");
 
 const pocMetrics = {
   documentClassificationScore: 80,
@@ -130,12 +131,17 @@ function apiHeaders(extra = {}) {
 }
 
 async function api(path, options = {}) {
-  const response = await fetch(path, {
+  const response = await fetch(`${apiBaseUrl}${path}`, {
     ...options,
     headers: apiHeaders(options.headers || {}),
   });
   const text = await response.text();
-  const data = text ? JSON.parse(text) : {};
+  let data = {};
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    throw new Error(`API returned a non-JSON response for ${path}. Check the backend URL.`);
+  }
   if (!response.ok) {
     throw new Error(data.detail || `Request failed with ${response.status}`);
   }

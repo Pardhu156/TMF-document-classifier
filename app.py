@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -65,6 +67,16 @@ app = FastAPI(
     description="API service for classifying Trial Master File document text.",
     version="1.0.0",
 )
+
+cors_origins = [origin.strip() for origin in os.getenv("CORS_ALLOWED_ORIGINS", "").split(",") if origin.strip()]
+if cors_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=cors_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
 FRONTEND_DIR = Path(__file__).resolve().parent / "frontend"
 if FRONTEND_DIR.exists():

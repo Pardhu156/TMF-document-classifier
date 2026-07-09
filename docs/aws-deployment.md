@@ -457,6 +457,36 @@ CloudWatch:
 - Find the Elastic Beanstalk environment log group.
 - Confirm startup, request, RAG, Redis, and upload logs are present.
 
+## Simpler POC Mode Without CloudFront
+
+If CloudFront routing is slowing down the demo, use S3 static website hosting and call Elastic Beanstalk directly.
+
+Frontend URL:
+
+```text
+http://tmf-poc-frontend-pardhu.s3-website-us-east-1.amazonaws.com
+```
+
+Backend URL:
+
+```text
+http://tmf-classifier-poc-env.eba-uwzpynwe.us-east-1.elasticbeanstalk.com
+```
+
+Elastic Beanstalk environment variable:
+
+```env
+CORS_ALLOWED_ORIGINS=http://tmf-poc-frontend-pardhu.s3-website-us-east-1.amazonaws.com
+```
+
+GitHub Actions secret:
+
+```env
+FRONTEND_API_BASE_URL=http://tmf-classifier-poc-env.eba-uwzpynwe.us-east-1.elasticbeanstalk.com
+```
+
+In this mode, `CLOUDFRONT_DISTRIBUTION_ID` is optional. If it is not set, GitHub Actions skips CloudFront invalidation and only syncs the frontend files to S3.
+
 ## Cost Checklist
 
 Potential charges:
