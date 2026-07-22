@@ -7,6 +7,7 @@ The application evidence is split into:
 - `app-ui/`: role-based product UI, RAG, classification, approval, admin, and monitoring screens.
 - `aws-evidence/`: AWS deployment proof for S3, RDS PostgreSQL, Elastic Beanstalk, and CloudWatch.
 - `ci-cd-evidence/`: GitHub Actions and Docker Hub delivery proof.
+- `mlops-evidence/`: DagsHub, DVC, and MLflow/model tracking proof.
 - `local-verification/`: local runtime/API verification proof.
 - `troubleshooting/`: non-demo screenshots kept separately so they do not interrupt the main portfolio flow.
 
@@ -67,6 +68,14 @@ The application evidence is split into:
 | [05-github-actions-frontend-s3-deploy.png](ci-cd-evidence/05-github-actions-frontend-s3-deploy.png) | Frontend deployment to S3 step |
 | [06-docker-hub-image-tags.png](ci-cd-evidence/06-docker-hub-image-tags.png) | Docker Hub image/tag evidence |
 
+## MLOps Evidence
+
+| Screenshot | Shows |
+| --- | --- |
+| [01-dagshub-repository-dvc-files.png](mlops-evidence/01-dagshub-repository-dvc-files.png) | DagsHub repository with DVC-tracked project/data artifacts |
+| [02-dagshub-experiments-table.png](mlops-evidence/02-dagshub-experiments-table.png) | DagsHub experiment tracking table |
+| [03-mlflow-rag-metrics-run.png](mlops-evidence/03-mlflow-rag-metrics-run.png) | MLflow run details for RAG metrics |
+
 ## Local Verification
 
 | Screenshot | Shows |
@@ -82,4 +91,4 @@ The application evidence is split into:
 
 ## Deployment Note
 
-The final POC deployment used S3 for static frontend hosting, Elastic Beanstalk for the Dockerized FastAPI backend, RDS PostgreSQL for metadata, S3 for uploaded TMF documents, Redis for cache/RAG acceleration, and CloudWatch for logs. CloudFront and Fargate are not required for the simplified low-cost portfolio deployment.
+The final POC deployment used S3 for static frontend hosting, Elastic Beanstalk for the Dockerized FastAPI backend, RDS PostgreSQL for metadata, S3 for uploaded TMF documents, Redis for cache/RAG acceleration, CloudWatch for logs, DVC for dataset/model artifact versioning, and MLflow/DagsHub for model/RAG experiment tracking. CloudFront and Fargate are not required for the simplified low-cost portfolio deployment.
