@@ -56,6 +56,7 @@ The application evidence is split into:
 | [07-elastic-beanstalk-environment.png](aws-evidence/07-elastic-beanstalk-environment.png) | Elastic Beanstalk Docker environment |
 | [08-cloudwatch-log-groups.png](aws-evidence/08-cloudwatch-log-groups.png) | CloudWatch log groups |
 | [09-cloudwatch-elastic-beanstalk-log-details.png](aws-evidence/09-cloudwatch-elastic-beanstalk-log-details.png) | Elastic Beanstalk logs in CloudWatch |
+| [10-elasticache-redis-cluster.png](aws-evidence/10-elasticache-redis-cluster.png) | ElastiCache Redis cluster |
 
 ## CI/CD Evidence
 
